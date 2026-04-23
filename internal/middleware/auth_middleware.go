@@ -24,7 +24,7 @@ func JWTAuth(svc *service.AuthService) gin.HandlerFunc {
 			return
 		}
 
-		c.Set("user_id", claims.UserID.String())
+		c.Set("user_id", claims.UserID)
 		c.Set("email", claims.Email)
 		c.Next()
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/krypton/auth-service/internal/handler"
 	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/repository"
+	"github.com/krypton/auth-service/internal/router"
 	"github.com/krypton/auth-service/internal/service"
 )
 
@@ -45,12 +46,8 @@ func main() {
 
 	// 4. HTTP-сервер
 	r := gin.Default()
-	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
-
 	authMiddleware := middleware.JWTAuth(authSvc)
-	authHandler.RegisterRoutes(r, authMiddleware)
+	router.Setup(r, authHandler, authMiddleware)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
