@@ -12,10 +12,13 @@ type User struct {
 	ID           UserID
 	Email        string
 	PasswordHash string
-	Name         string
+	LastName     string
+	FirstName    string
+	Patronymic   *string
 	Phone        string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	DeletedAt    *time.Time
 }
 
 func (u *User) UpdatePhone(phone string) {

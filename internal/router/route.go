@@ -3,25 +3,35 @@ package router
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/go-chi/chi/v5"
 	"github.com/krypton/auth-service/internal/handler"
 )
 
-func Setup(r *gin.Engine, h *handler.AuthHandler, authMw gin.HandlerFunc) {
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+func NewRouter(r *chi.Mux, authH *handler.AuthHandler, userH *handler.UserHandler, authMw func(http.Handler) http.Handler) {
+
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	v1 := r.Group("/api/v1/auth")
-	{
-		v1.POST("/register", h.Register)
-		v1.POST("/login", h.Login)
-		v1.POST("/refresh", h.Refresh)
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/register", authH.Register)
+			r.Post("/login", authH.Login)
+			r.Post("/refresh", authH.Refresh)
 
-		protected := v1.Group("", authMw)
-		{
-			protected.POST("/logout", h.Logout)
-			protected.GET("/me", h.Me)
-		}
-	}
+			r.Group(func(r chi.Router) {
+				r.Use(authMw)
+				r.Post("/logout", authH.Logout)
+				r.Get("/me", authH.Me)
+			})
+		})
+
+		r.Route("/users", func(r chi.Router) {
+			r.Use(authMw)
+			r.Get("/", userH.GetUsers)
+			r.Get("/{id}", userH.GetUserByID)
+			r.Delete("/{id}", userH.DeleteUser)
+		})
+	})
 }

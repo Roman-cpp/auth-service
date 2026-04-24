@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/handler"
@@ -20,34 +20,26 @@ import (
 )
 
 func main() {
-	// 1. Конфигурация
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("config: %v", err)
-	}
+	cfg, _ := config.Load()
+	
 
-	// 2. Подключение к PostgreSQL
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, cfg.Database.DSN)
 	if err != nil {
 		log.Fatalf("db connect: %v", err)
 	}
 	defer pool.Close()
+	
 
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("db ping: %v", err)
-	}
-	log.Println("connected to PostgreSQL")
-
-	// 3. Сборка слоёв
 	userRepo := repository.NewUserRepository(pool)
 	authSvc := service.NewAuthService(userRepo, cfg)
+	userSvc := service.NewUserService(userRepo)
 	authHandler := handler.NewAuthHandler(authSvc)
+	userHandler := handler.NewUserHandler(userSvc)
 
-	// 4. HTTP-сервер
-	r := gin.Default()
+	r := chi.NewRouter()
 	authMiddleware := middleware.JWTAuth(authSvc)
-	router.Setup(r, authHandler, authMiddleware)
+	router.NewRouter(r, authHandler, userHandler, authMiddleware)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -56,7 +48,6 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	// 5. Graceful shutdown
 	go func() {
 		log.Printf("server listening on :%s", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

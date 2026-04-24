@@ -36,10 +36,30 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash string)
 	return u, nil
 }
 
+func (r *UserRepository) GetAll(ctx context.Context) ([]*user.User, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, email, password_hash, created_at FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*user.User
+	for rows.Next() {
+		u := &user.User{}
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE email = $1`,
+		`SELECT id, email, password_hash, created_at FROM users WHERE email = $1 AND deleted_at IS NULL`,
 		email,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -51,13 +71,27 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.Us
 func (r *UserRepository) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE id = $1`,
+		`SELECT id, email, password_hash, created_at FROM users WHERE id = $1 AND deleted_at IS NULL`,
 		id,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
 	}
 	return u, err
+}
+
+func (r *UserRepository) SoftDelete(ctx context.Context, id user.UserID) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE users SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return user.ErrNotFound
+	}
+	return nil
 }
 
 func (r *UserRepository) SaveRefreshToken(ctx context.Context, userID user.UserID, token string, expiresAt time.Time) error {

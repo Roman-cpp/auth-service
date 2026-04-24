@@ -1,14 +1,17 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
-	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/service"
 )
+
+var validate = validator.New()
 
 type AuthHandler struct {
 	svc *service.AuthService
@@ -18,106 +21,119 @@ func NewAuthHandler(svc *service.AuthService) *AuthHandler {
 	return &AuthHandler{svc: svc}
 }
 
-func (h *AuthHandler) Register(c *gin.Context) {
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req user.RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := validate.Struct(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	u, err := h.svc.Register(c.Request.Context(), &req)
+	u, err := h.svc.Register(r.Context(), &req)
 	if errors.Is(err, user.ErrEmailTaken) {
-		c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "email already registered"})
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, u)
+	writeJSON(w, http.StatusCreated, u)
 }
 
-func (h *AuthHandler) Login(c *gin.Context) {
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req user.LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := validate.Struct(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	tokens, err := h.svc.Login(c.Request.Context(), &req)
+	tokens, err := h.svc.Login(r.Context(), &req)
 	if errors.Is(err, service.ErrInvalidCredentials) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid email or password"})
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, tokens)
+	writeJSON(w, http.StatusOK, tokens)
 }
 
-func (h *AuthHandler) Refresh(c *gin.Context) {
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req user.RefreshRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := validate.Struct(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	tokens, err := h.svc.Refresh(c.Request.Context(), &req)
+	tokens, err := h.svc.Refresh(r.Context(), &req)
 	if errors.Is(err, service.ErrInvalidToken) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired refresh token"})
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, tokens)
+	writeJSON(w, http.StatusOK, tokens)
 }
 
-func (h *AuthHandler) Logout(c *gin.Context) {
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	var req user.RefreshRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := validate.Struct(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	if err := h.svc.Logout(r.Context(), req.RefreshToken); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "logged out successfully"})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "logged out successfully"})
 }
 
-func (h *AuthHandler) Me(c *gin.Context) {
-	rawID, ok := c.Get("user_id")
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(middleware.ContextKeyUserID).(string)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 
-	u, err := h.svc.GetByID(c.Request.Context(), rawID.(string))
+	u, err := h.svc.GetByID(r.Context(), userID)
 	if errors.Is(err, user.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, user.UserResponse{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
-}
-
-func ExtractBearerToken(c *gin.Context) string {
-	header := c.GetHeader("Authorization")
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-		return parts[1]
-	}
-	return ""
+	writeJSON(w, http.StatusOK, user.UserResponse{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
 }
