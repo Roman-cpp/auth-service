@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-playground/validator/v10"
@@ -10,6 +11,14 @@ import (
 	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/service"
 )
+
+type RegisterRequest struct {
+	LastName   string  `json:"last_name"    validate:"required"`
+	FirstName  string  `json:"first_name"    validate:"required"`
+	Patronymic *string `json:"patronymic"    validate:""`
+	Email      string  `json:"email"    validate:"required,email"`
+	Password   string  `json:"password" validate:"required,min=8"`
+}
 
 var validate = validator.New()
 
@@ -28,7 +37,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	var req user.RegisterRequest
+	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -38,12 +47,21 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.svc.Register(r.Context(), &req)
+	dto := user.CreateDTO{
+		FirstName:  req.FirstName,
+		LastName:   req.LastName,
+		Patronymic: req.Patronymic,
+		Email:      req.Email,
+		Password:   req.Password,
+	}
+
+	u, err := h.svc.Register(r.Context(), &dto)
 	if errors.Is(err, user.ErrEmailTaken) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "email already registered"})
 		return
 	}
 	if err != nil {
+		log.Printf("Register: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -52,7 +70,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	var req user.LoginRequest
+	var req user.Login
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -68,6 +86,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		log.Printf("Login: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -76,7 +95,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	var req user.RefreshRequest
+	var req user.Refresh
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -92,6 +111,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		log.Printf("Refresh: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -100,7 +120,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	var req user.RefreshRequest
+	var req user.Refresh
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -111,6 +131,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.Logout(r.Context(), req.RefreshToken); err != nil {
+		log.Printf("Logout: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -131,9 +152,10 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		log.Printf("Me: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user.UserResponse{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
+	writeJSON(w, http.StatusOK, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
 }

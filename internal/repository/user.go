@@ -19,14 +19,14 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{pool: pool}
 }
 
-func (r *UserRepository) Create(ctx context.Context, email, passwordHash string) (*user.User, error) {
+func (r *UserRepository) Create(ctx context.Context, dto user.CreateDTO) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash)
-		 VALUES ($1, $2)
-		 RETURNING id, email, password_hash, created_at`,
-		email, passwordHash,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+		`INSERT INTO users (last_name, first_name, patronymic, email, password_hash)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id, last_name, first_name, patronymic, email, password_hash, created_at`,
+		dto.LastName, dto.FirstName, dto.Patronymic, dto.Email, dto.PasswordHash,
+	).Scan(&u.ID, &u.LastName, &u.FirstName, &u.Patronymic, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if err != nil {
 		if isPgUniqueViolation(err) {
 			return nil, user.ErrEmailTaken

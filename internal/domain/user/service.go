@@ -3,6 +3,7 @@ package user
 import "context"
 
 type AuthService interface {
+	Register(ctx context.Context, dto CreateDTO) (*UserPreview, error)
 	GetByID(ctx context.Context, id UserID) (*User, error)
 }
 

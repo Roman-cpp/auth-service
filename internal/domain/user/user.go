@@ -21,6 +21,15 @@ type User struct {
 	DeletedAt    *time.Time
 }
 
+type UserPreview struct {
+	ID           UserID
+	Email        string
+	LastName     string
+	FirstName    string
+	Patronymic   *string
+	CreatedAt    time.Time
+}
+
 func (u *User) UpdatePhone(phone string) {
 	u.Phone = phone
 	u.UpdatedAt = time.Now()

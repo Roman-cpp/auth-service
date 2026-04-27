@@ -6,7 +6,7 @@ import (
 )
 
 type Repository interface {
-	Create(ctx context.Context, email, passwordHash string) (*User, error)
+	Create(ctx context.Context, dto CreateDTO) (*User, error)
 	GetAll(ctx context.Context) ([]*User, error)
 	GetByID(ctx context.Context, id UserID) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)

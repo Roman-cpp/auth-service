@@ -55,7 +55,7 @@ func buildDSN() string {
 	if dsn != "" {
 		return dsn
 	}
-	host := getEnv("DB_HOST", "localhost")
+	host := getEnv("DB_HOST", "postgres")
 	port := getEnv("DB_PORT", "5432")
 	user := getEnv("DB_USER", "postgres")
 	pass := getEnv("DB_PASSWORD", "postgres")

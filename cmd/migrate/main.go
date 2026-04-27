@@ -16,7 +16,7 @@ import (
 var FS embed.FS
 
 func main() {
-	dsn := flag.String("dsn", "pgx5://postgres:postgres@localhost:5432/postgres?sslmode=disable", "database DSN")
+	dsn := flag.String("dsn", "pgx5://postgres:postgres@localhost:5432/authdb?sslmode=disable", "database DSN")
 	flag.Parse()
 
 	cmd := flag.Arg(0)

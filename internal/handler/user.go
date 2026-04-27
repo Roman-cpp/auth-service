@@ -24,9 +24,9 @@ func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := make([]user.UserResponse, 0, len(users))
+	resp := make([]user.UserPreview, 0, len(users))
 	for _, u := range users {
-		resp = append(resp, user.UserResponse{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
+		resp = append(resp, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -44,7 +44,7 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user.UserResponse{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
+	writeJSON(w, http.StatusOK, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {

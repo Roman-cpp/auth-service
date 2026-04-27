@@ -26,13 +26,15 @@ func NewAuthService(repo user.Repository, cfg *config.Config) *AuthService {
 	return &AuthService{repo: repo, cfg: cfg}
 }
 
-func (s *AuthService) Register(ctx context.Context, req *user.RegisterRequest) (*user.UserResponse, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
+func (s *AuthService) Register(ctx context.Context, dto *user.CreateDTO) (*user.UserPreview, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(dto.Password), 12)
 	if err != nil {
 		return nil, err
 	}
 
-	u, err := s.repo.Create(ctx, req.Email, string(hash))
+	dto.PasswordHash = string(hash)
+
+	u, err := s.repo.Create(ctx, *dto)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +42,7 @@ func (s *AuthService) Register(ctx context.Context, req *user.RegisterRequest) (
 	return toUserResponse(u), nil
 }
 
-func (s *AuthService) Login(ctx context.Context, req *user.LoginRequest) (*user.TokenResponse, error) {
+func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.TokenResponse, error) {
 	u, err := s.repo.GetByEmail(ctx, req.Email)
 	if errors.Is(err, user.ErrNotFound) {
 		return nil, ErrInvalidCredentials
@@ -56,7 +58,7 @@ func (s *AuthService) Login(ctx context.Context, req *user.LoginRequest) (*user.
 	return s.issueTokenPair(ctx, u)
 }
 
-func (s *AuthService) Refresh(ctx context.Context, req *user.RefreshRequest) (*user.TokenResponse, error) {
+func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.TokenResponse, error) {
 	rt, err := s.repo.GetRefreshToken(ctx, req.RefreshToken)
 	if errors.Is(err, user.ErrNotFound) {
 		return nil, ErrInvalidToken
@@ -141,8 +143,8 @@ func (s *AuthService) generateAccessToken(u *user.User) (string, time.Time, erro
 	return signed, expiresAt, err
 }
 
-func toUserResponse(u *user.User) *user.UserResponse {
-	return &user.UserResponse{
+func toUserResponse(u *user.User) *user.UserPreview {
+	return &user.UserPreview{
 		ID:        u.ID,
 		Email:     u.Email,
 		CreatedAt: u.CreatedAt,

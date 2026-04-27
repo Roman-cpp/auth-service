@@ -1,18 +1,20 @@
 package user
 
-import "time"
-
-type RegisterRequest struct {
-	Email    string `json:"email"    validate:"required,email"`
-	Password string `json:"password" validate:"required,min=8"`
+type CreateDTO struct {
+	LastName     string  `json:"last_name"`
+	FirstName    string  `json:"first_name"`
+	Patronymic   *string `json:"patronymic"`
+	Email        string  `json:"email"`
+	Password     string  `json:"password"`
+	PasswordHash string  `json:"password_hash"`
 }
 
-type LoginRequest struct {
+type Login struct {
 	Email    string `json:"email"    validate:"required,email"`
 	Password string `json:"password" validate:"required"`
 }
 
-type RefreshRequest struct {
+type Refresh struct {
 	RefreshToken string `json:"refresh_token" validate:"required"`
 }
 
@@ -20,10 +22,4 @@ type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
-}
-
-type UserResponse struct {
-	ID        UserID    `json:"id"`
-	Email     string    `json:"email"`
-	CreatedAt time.Time `json:"created_at"`
 }
