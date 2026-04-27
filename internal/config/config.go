@@ -10,12 +10,14 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
+	Service  ServiceConfig
 	Database DatabaseConfig
 	JWT      JWTConfig
 }
 
-type ServerConfig struct {
+type ServiceConfig struct {
+	Name string
+	Env  string
 	Port string
 }
 
@@ -34,8 +36,10 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Server: ServerConfig{
-			Port: getEnv("SERVER_PORT", "8080"),
+		Service: ServiceConfig{
+			Name: getEnv("SERVICE_NAME", "auth-service"),
+			Env:  getEnv("SERVICE_ENV", "local"),
+			Port: getEnv("SERVICE_PORT", "8080"),
 		},
 		Database: DatabaseConfig{
 			DSN: buildDSN(),
@@ -59,7 +63,7 @@ func buildDSN() string {
 	port := getEnv("DB_PORT", "5432")
 	user := getEnv("DB_USER", "postgres")
 	pass := getEnv("DB_PASSWORD", "postgres")
-	name := getEnv("DB_NAME", "authdb")
+	name := getEnv("DB_NAME", "auth-db")
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, pass, host, port, name)
 }
 

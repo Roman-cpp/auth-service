@@ -42,14 +42,14 @@ func main() {
 	router.NewRouter(r, authHandler, userHandler, authMiddleware)
 
 	srv := &http.Server{
-		Addr:         ":" + cfg.Server.Port,
+		Addr:         ":" + cfg.Service.Port,
 		Handler:      r,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
 	go func() {
-		log.Printf("server listening on :%s", cfg.Server.Port)
+		log.Printf("server listening on :%s", cfg.Service.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
 		}

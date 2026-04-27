@@ -6,17 +6,35 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/joho/godotenv"
 )
 
 //go:embed migrations/*
 var FS embed.FS
 
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func main() {
-	dsn := flag.String("dsn", "pgx5://postgres:postgres@localhost:5432/authdb?sslmode=disable", "database DSN")
+	_ = godotenv.Load()
+
+	defaultDSN := fmt.Sprintf("pgx5://%s:%s@%s:%s/%s?sslmode=disable",
+		getenv("DB_USER", "postgres"),
+		getenv("DB_PASSWORD", "postgres"),
+		getenv("DB_HOST", "localhost"),
+		getenv("DB_PORT", "5432"),
+		getenv("DB_NAME", "auth-db"),
+	)
+	dsn := flag.String("dsn", defaultDSN, "database DSN")
 	flag.Parse()
 
 	cmd := flag.Arg(0)
