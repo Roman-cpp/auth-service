@@ -11,20 +11,18 @@ func NewRouter(r *chi.Mux, authH *handler.AuthHandler, userH *handler.UserHandle
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		w.Write([]byte(`{"name": "auth", "status":"ok"}`))
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Route("/auth", func(r chi.Router) {
-			r.Post("/register", authH.Register)
-			r.Post("/login", authH.Login)
-			r.Post("/refresh", authH.Refresh)
+		r.Post("/register", authH.Register)
+		r.Post("/login", authH.Login)
+		r.Post("/refresh", authH.Refresh)
 
-			r.Group(func(r chi.Router) {
-				r.Use(authMw)
-				r.Post("/logout", authH.Logout)
-				r.Get("/me", authH.Me)
-			})
+		r.Group(func(r chi.Router) {
+			r.Use(authMw)
+			r.Post("/logout", authH.Logout)
+			r.Get("/me", authH.Me)
 		})
 
 		r.Route("/users", func(r chi.Router) {
