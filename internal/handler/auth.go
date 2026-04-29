@@ -7,9 +7,11 @@ import (
 	"net/http"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/service"
+	"github.com/krypton/auth-service/pkg/httputil"
 )
 
 type RegisterRequest struct {
@@ -23,27 +25,22 @@ type RegisterRequest struct {
 var validate = validator.New()
 
 type AuthHandler struct {
-	svc *service.AuthService
+	svc     *service.AuthService
+	cookies *CookieManager
 }
 
-func NewAuthHandler(svc *service.AuthService) *AuthHandler {
-	return &AuthHandler{svc: svc}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+func NewAuthHandler(svc *service.AuthService, cfg *config.Config) *AuthHandler {
+	return &AuthHandler{svc: svc, cookies: NewCookieManager(cfg)}
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
 		return
 	}
 	if err := validate.Struct(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
 		return
 	}
 
@@ -57,105 +54,97 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	u, err := h.svc.Register(r.Context(), &dto)
 	if errors.Is(err, user.ErrEmailTaken) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "email already registered"})
+		httputil.WriteJSON(w, http.StatusConflict, httputil.ErrorResponse{Code: "email_taken", Message: "email already registered"})
 		return
 	}
 	if err != nil {
 		log.Printf("Register: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, u)
+	httputil.WriteJSON(w, http.StatusCreated, httputil.Response{Data: u})
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req user.Login
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
 		return
 	}
 	if err := validate.Struct(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
 		return
 	}
 
-	tokens, err := h.svc.Login(r.Context(), &req)
+	tokens, u, err := h.svc.Login(r.Context(), &req)
 	if errors.Is(err, service.ErrInvalidCredentials) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid email or password"})
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "invalid_credentials", Message: "invalid email or password"})
 		return
 	}
 	if err != nil {
 		log.Printf("Login: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, tokens)
+	h.cookies.SetTokenCookies(w, tokens)
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": u}})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	var req user.Refresh
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := validate.Struct(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	log.Printf("Refresh cookies: %v", r.Cookies())
+
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "unauthorized", Message: "refresh token not found"})
 		return
 	}
 
-	tokens, err := h.svc.Refresh(r.Context(), &req)
+	tokens, err := h.svc.Refresh(r.Context(), &user.Refresh{RefreshToken: cookie.Value})
 	if errors.Is(err, service.ErrInvalidToken) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired refresh token"})
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "invalid_token", Message: "invalid or expired refresh token"})
 		return
 	}
 	if err != nil {
 		log.Printf("Refresh: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, tokens)
+	h.cookies.SetTokenCookies(w, tokens)
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]string{"message": "ok"}})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	var req user.Refresh
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := validate.Struct(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+			log.Printf("Logout: %v", err)
+		}
 	}
 
-	if err := h.svc.Logout(r.Context(), req.RefreshToken); err != nil {
-		log.Printf("Logout: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"message": "logged out successfully"})
+	h.cookies.ClearTokenCookies(w)
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]string{"message": "logged out successfully"}})
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(middleware.ContextKeyUserID).(string)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "unauthorized", Message: "unauthorized"})
 		return
 	}
 
 	u, err := h.svc.GetByID(r.Context(), userID)
 	if errors.Is(err, user.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
 		return
 	}
 	if err != nil {
 		log.Printf("Me: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}})
 }
+

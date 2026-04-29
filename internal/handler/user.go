@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/service"
+	"github.com/krypton/auth-service/pkg/httputil"
 )
 
 type UserHandler struct {
@@ -20,7 +21,7 @@ func NewUserHandler(svc *service.UserService) *UserHandler {
 func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.svc.GetAll(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 
@@ -28,7 +29,7 @@ func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		resp = append(resp, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: resp})
 }
 
 func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
@@ -36,15 +37,15 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 
 	u, err := h.svc.GetByID(r.Context(), id)
 	if errors.Is(err, user.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}})
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -52,11 +53,11 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	err := h.svc.DeleteUser(r.Context(), id)
 	if errors.Is(err, user.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
 		return
 	}
 

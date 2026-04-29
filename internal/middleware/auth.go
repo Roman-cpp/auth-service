@@ -18,7 +18,7 @@ const (
 func JWTAuth(svc *service.AuthService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := extractBearer(r)
+			token := extractToken(r)
 			if token == "" {
 				http.Error(w, `{"error":"authorization header required"}`, http.StatusUnauthorized)
 				return
@@ -35,6 +35,13 @@ func JWTAuth(svc *service.AuthService) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func extractToken(r *http.Request) string {
+	if cookie, err := r.Cookie("access_token"); err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	return extractBearer(r)
 }
 
 func extractBearer(r *http.Request) string {

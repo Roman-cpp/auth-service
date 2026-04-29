@@ -22,12 +22,12 @@ type User struct {
 }
 
 type UserPreview struct {
-	ID           UserID
-	Email        string
-	LastName     string
-	FirstName    string
-	Patronymic   *string
-	CreatedAt    time.Time
+	ID           UserID `json:"id"`
+	Email        string `json:"email"`
+	LastName     string `json:"last_name"`
+	FirstName    string `json:"first_name"`
+	Patronymic   *string `json:"patronymic"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 func (u *User) UpdatePhone(phone string) {

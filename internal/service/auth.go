@@ -42,20 +42,25 @@ func (s *AuthService) Register(ctx context.Context, dto *user.CreateDTO) (*user.
 	return toUserResponse(u), nil
 }
 
-func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.TokenResponse, error) {
+func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.TokenResponse, *user.UserPreview, error) {
 	u, err := s.repo.GetByEmail(ctx, req.Email)
 	if errors.Is(err, user.ErrNotFound) {
-		return nil, ErrInvalidCredentials
+		return nil, nil, ErrInvalidCredentials
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
-		return nil, ErrInvalidCredentials
+		return nil, nil, ErrInvalidCredentials
 	}
 
-	return s.issueTokenPair(ctx, u)
+	tokens, err := s.issueTokenPair(ctx, u)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return tokens, toUserResponse(u), nil
 }
 
 func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.TokenResponse, error) {
@@ -145,8 +150,11 @@ func (s *AuthService) generateAccessToken(u *user.User) (string, time.Time, erro
 
 func toUserResponse(u *user.User) *user.UserPreview {
 	return &user.UserPreview{
-		ID:        u.ID,
-		Email:     u.Email,
-		CreatedAt: u.CreatedAt,
+		ID:         u.ID,
+		Email:      u.Email,
+		FirstName:  u.FirstName,
+		LastName:   u.LastName,
+		Patronymic: u.Patronymic,
+		CreatedAt:  u.CreatedAt,
 	}
 }

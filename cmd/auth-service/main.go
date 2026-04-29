@@ -34,7 +34,7 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	authSvc := service.NewAuthService(userRepo, cfg)
 	userSvc := service.NewUserService(userRepo)
-	authHandler := handler.NewAuthHandler(authSvc)
+	authHandler := handler.NewAuthHandler(authSvc, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
 
 	r := chi.NewRouter()

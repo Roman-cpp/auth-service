@@ -26,9 +26,11 @@ type DatabaseConfig struct {
 }
 
 type JWTConfig struct {
-	Secret           string
-	AccessTokenTTL   time.Duration
-	RefreshTokenTTL  time.Duration
+	Secret          string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+	CookieDomain    string
+	CookieSecure    bool
 }
 
 func Load() (*Config, error) {
@@ -48,6 +50,8 @@ func Load() (*Config, error) {
 			Secret:          mustGetEnv("JWT_SECRET"),
 			AccessTokenTTL:  parseDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTokenTTL: parseDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+			CookieDomain:    getEnv("COOKIE_DOMAIN", ""),
+			CookieSecure:    getEnv("COOKIE_SECURE", "false") == "true",
 		},
 	}
 
