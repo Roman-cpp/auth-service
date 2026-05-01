@@ -136,7 +136,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 	u, err := h.svc.GetByID(r.Context(), userID)
 	if errors.Is(err, user.ErrNotFound) {
-		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
+		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
 		return
 	}
 	if err != nil {
@@ -145,6 +145,6 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}})
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}}})
 }
 
