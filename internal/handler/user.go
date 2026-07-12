@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/service"
 	"github.com/krypton/auth-service/pkg/httputil"
 )
@@ -18,22 +19,24 @@ func NewUserHandler(svc *service.UserService) *UserHandler {
 	return &UserHandler{svc: svc}
 }
 
-func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.svc.GetAll(r.Context())
-	if err != nil {
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
-		return
+// requireSelf: пока в сервисе нет ролей, доступ к /users/{id} разрешён
+// только владельцу аккаунта; администрирование чужих пользователей —
+// задача будущего /admin API.
+func requireSelf(w http.ResponseWriter, r *http.Request) (user.UserID, bool) {
+	id := chi.URLParam(r, "id")
+	authID, ok := r.Context().Value(middleware.ContextKeyUserID).(string)
+	if !ok || authID != id {
+		httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorResponse{Code: "forbidden", Message: "access denied"})
+		return "", false
 	}
-
-	resp := make([]user.UserPreview, 0, len(users))
-	for _, u := range users {
-		resp = append(resp, user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt})
-	}
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: resp})
+	return id, true
 }
 
 func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id, ok := requireSelf(w, r)
+	if !ok {
+		return
+	}
 
 	u, err := h.svc.GetByID(r.Context(), id)
 	if errors.Is(err, user.ErrNotFound) {
@@ -49,7 +52,10 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id, ok := requireSelf(w, r)
+	if !ok {
+		return
+	}
 
 	err := h.svc.DeleteUser(r.Context(), id)
 	if errors.Is(err, user.ErrNotFound) {

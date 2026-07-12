@@ -1,0 +1,16 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/auth-service ./cmd/auth-service/main.go"
+bin = "./tmp/auth-service"
+include_ext = ["go", "mod", "sum"]
+exclude_dir = ["tmp", "docs", "migrations"]
+delay = 1000
+stop_on_error = true
+
+[log]
+main_only = true
+
+[misc]
+clean_on_exit = true

@@ -7,14 +7,18 @@ import (
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
-const refreshTokenPath = "/api/auth/v1/auth/refresh"
-
 type CookieManager struct {
 	cfg *config.Config
 }
 
 func NewCookieManager(cfg *config.Config) *CookieManager {
 	return &CookieManager{cfg: cfg}
+}
+
+// Путь считается от внешнего (гейтвейного) адреса сервиса и должен
+// покрывать и /refresh, и /logout.
+func (cm *CookieManager) refreshTokenPath() string {
+	return cm.cfg.JWT.CookiePathPrefix + "/v1/auth"
 }
 
 func (cm *CookieManager) SetTokenCookies(w http.ResponseWriter, tokens *user.TokenResponse) {
@@ -34,7 +38,7 @@ func (cm *CookieManager) SetTokenCookies(w http.ResponseWriter, tokens *user.Tok
 		HttpOnly: true,
 		Secure:   cm.cfg.JWT.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
-		Path:     refreshTokenPath,
+		Path:     cm.refreshTokenPath(),
 		MaxAge:   int(cm.cfg.JWT.RefreshTokenTTL.Seconds()),
 		Domain:   cm.cfg.JWT.CookieDomain,
 	})
@@ -57,7 +61,7 @@ func (cm *CookieManager) ClearTokenCookies(w http.ResponseWriter) {
 		HttpOnly: true,
 		Secure:   cm.cfg.JWT.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
-		Path:     refreshTokenPath,
+		Path:     cm.refreshTokenPath(),
 		MaxAge:   -1,
 		Domain:   cm.cfg.JWT.CookieDomain,
 	})

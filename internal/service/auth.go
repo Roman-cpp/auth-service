@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"golang.org/x/crypto/bcrypt"
@@ -64,7 +67,9 @@ func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.TokenRe
 }
 
 func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.TokenResponse, error) {
-	rt, err := s.repo.GetRefreshToken(ctx, req.RefreshToken)
+	tokenHash := hashRefreshToken(req.RefreshToken)
+
+	rt, err := s.repo.GetRefreshToken(ctx, tokenHash)
 	if errors.Is(err, user.ErrNotFound) {
 		return nil, ErrInvalidToken
 	}
@@ -72,17 +77,33 @@ func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.Tok
 		return nil, err
 	}
 
+	// Повторное использование уже отозванного токена — признак кражи:
+	// отзываем все сессии пользователя.
+	if rt.RevokedAt != nil {
+		_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
+		return nil, ErrInvalidToken
+	}
+
 	if time.Now().After(rt.ExpiresAt) {
-		_ = s.repo.DeleteRefreshToken(ctx, req.RefreshToken)
+		_ = s.repo.DeleteRefreshToken(ctx, tokenHash)
 		return nil, ErrInvalidToken
 	}
 
 	u, err := s.repo.GetByID(ctx, rt.UserID)
+	if errors.Is(err, user.ErrNotFound) {
+		_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
+		return nil, ErrInvalidToken
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.repo.DeleteRefreshToken(ctx, req.RefreshToken); err != nil {
+	if err := s.repo.RevokeRefreshToken(ctx, tokenHash); err != nil {
+		if errors.Is(err, user.ErrNotFound) {
+			// Токен успели отозвать параллельно — тоже reuse.
+			_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
+			return nil, ErrInvalidToken
+		}
 		return nil, err
 	}
 
@@ -90,7 +111,7 @@ func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.Tok
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
-	return s.repo.DeleteRefreshToken(ctx, refreshToken)
+	return s.repo.DeleteRefreshToken(ctx, hashRefreshToken(refreshToken))
 }
 
 func (s *AuthService) ValidateAccessToken(tokenStr string) (*user.Claims, error) {
@@ -119,9 +140,12 @@ func (s *AuthService) issueTokenPair(ctx context.Context, u *user.User) (*user.T
 		return nil, err
 	}
 
-	refreshToken := uuid.NewString()
+	refreshToken, err := generateRefreshToken()
+	if err != nil {
+		return nil, err
+	}
 	refreshExpiresAt := time.Now().Add(s.cfg.JWT.RefreshTokenTTL)
-	if err := s.repo.SaveRefreshToken(ctx, u.ID, refreshToken, refreshExpiresAt); err != nil {
+	if err := s.repo.SaveRefreshToken(ctx, u.ID, hashRefreshToken(refreshToken), refreshExpiresAt); err != nil {
 		return nil, err
 	}
 
@@ -146,6 +170,21 @@ func (s *AuthService) generateAccessToken(u *user.User) (string, time.Time, erro
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(s.cfg.JWT.Secret))
 	return signed, expiresAt, err
+}
+
+func generateRefreshToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// В БД хранится только SHA-256 от токена: утечка таблицы refresh_tokens
+// не даёт угнать сессии.
+func hashRefreshToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func toUserResponse(u *user.User) *user.UserPreview {

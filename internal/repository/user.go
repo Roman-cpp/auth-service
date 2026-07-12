@@ -94,30 +94,54 @@ func (r *UserRepository) SoftDelete(ctx context.Context, id user.UserID) error {
 	return nil
 }
 
-func (r *UserRepository) SaveRefreshToken(ctx context.Context, userID user.UserID, token string, expiresAt time.Time) error {
+func (r *UserRepository) SaveRefreshToken(ctx context.Context, userID user.UserID, tokenHash string, expiresAt time.Time) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)`,
-		userID, token, expiresAt,
+		userID, tokenHash, expiresAt,
 	)
 	return err
 }
 
-func (r *UserRepository) GetRefreshToken(ctx context.Context, token string) (*user.RefreshToken, error) {
+func (r *UserRepository) GetRefreshToken(ctx context.Context, tokenHash string) (*user.RefreshToken, error) {
 	rt := &user.RefreshToken{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, token, expires_at, created_at FROM refresh_tokens WHERE token = $1`,
-		token,
-	).Scan(&rt.ID, &rt.UserID, &rt.Token, &rt.ExpiresAt, &rt.CreatedAt)
+		`SELECT id, user_id, token, expires_at, revoked_at, created_at FROM refresh_tokens WHERE token = $1`,
+		tokenHash,
+	).Scan(&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ExpiresAt, &rt.RevokedAt, &rt.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
 	}
 	return rt, err
 }
 
-func (r *UserRepository) DeleteRefreshToken(ctx context.Context, token string) error {
+// RevokeRefreshToken помечает токен использованным. Возвращает ErrNotFound,
+// если токен уже был отозван или не существует — так параллельные refresh
+// с одним токеном не выдадут две пары.
+func (r *UserRepository) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked_at = NOW() WHERE token = $1 AND revoked_at IS NULL`,
+		tokenHash,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return user.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) DeleteRefreshToken(ctx context.Context, tokenHash string) error {
 	_, err := r.pool.Exec(ctx,
 		`DELETE FROM refresh_tokens WHERE token = $1`,
-		token,
+		tokenHash,
+	)
+	return err
+}
+
+func (r *UserRepository) DeleteExpiredRefreshTokens(ctx context.Context) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM refresh_tokens WHERE expires_at < NOW()`,
 	)
 	return err
 }

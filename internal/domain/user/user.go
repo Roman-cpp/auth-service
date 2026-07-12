@@ -38,8 +38,9 @@ func (u *User) UpdatePhone(phone string) {
 type RefreshToken struct {
 	ID        string
 	UserID    UserID
-	Token     string
+	TokenHash string
 	ExpiresAt time.Time
+	RevokedAt *time.Time
 	CreatedAt time.Time
 }
 

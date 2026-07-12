@@ -31,6 +31,11 @@ type JWTConfig struct {
 	RefreshTokenTTL time.Duration
 	CookieDomain    string
 	CookieSecure    bool
+	// Префикс, под которым сервис виден клиенту. Gateway (nginx) публикует
+	// его как /api/auth/v1/** и переписывает в /api/v1/** — куки же живут
+	// в браузере, поэтому их Path должен считаться от внешнего адреса.
+	// Для запуска без gateway задайте COOKIE_PATH_PREFIX=/api.
+	CookiePathPrefix string
 }
 
 func Load() (*Config, error) {
@@ -51,7 +56,8 @@ func Load() (*Config, error) {
 			AccessTokenTTL:  parseDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTokenTTL: parseDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
 			CookieDomain:    getEnv("COOKIE_DOMAIN", ""),
-			CookieSecure:    getEnv("COOKIE_SECURE", "false") == "true",
+			CookieSecure:     getEnv("COOKIE_SECURE", "true") == "true",
+			CookiePathPrefix: getEnv("COOKIE_PATH_PREFIX", "/api/auth"),
 		},
 	}
 

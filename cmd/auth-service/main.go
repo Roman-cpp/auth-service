@@ -20,8 +20,10 @@ import (
 )
 
 func main() {
-	cfg, _ := config.Load()
-	
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, cfg.Database.DSN)
@@ -36,6 +38,23 @@ func main() {
 	userSvc := service.NewUserService(userRepo)
 	authHandler := handler.NewAuthHandler(authSvc, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
+
+	cleanupCtx, cleanupCancel := context.WithCancel(ctx)
+	defer cleanupCancel()
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cleanupCtx.Done():
+				return
+			case <-ticker.C:
+				if err := userRepo.DeleteExpiredRefreshTokens(cleanupCtx); err != nil {
+					log.Printf("refresh tokens cleanup: %v", err)
+				}
+			}
+		}
+	}()
 
 	r := chi.NewRouter()
 	authMiddleware := middleware.JWTAuth(authSvc)

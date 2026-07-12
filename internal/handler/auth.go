@@ -19,7 +19,8 @@ type RegisterRequest struct {
 	FirstName  string  `json:"first_name"    validate:"required"`
 	Patronymic *string `json:"patronymic"    validate:""`
 	Email      string  `json:"email"    validate:"required,email"`
-	Password   string  `json:"password" validate:"required,min=8"`
+	// max=72 — предел bcrypt: более длинный пароль Go-реализация отвергает с ошибкой
+	Password   string  `json:"password" validate:"required,min=8,max=72"`
 }
 
 var validate = validator.New()
@@ -93,8 +94,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Refresh cookies: %v", r.Cookies())
-
 	cookie, err := r.Cookie("refresh_token")
 	if err != nil {
 		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "unauthorized", Message: "refresh token not found"})
