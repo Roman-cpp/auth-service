@@ -59,9 +59,10 @@ func (r *UserRepository) GetAll(ctx context.Context) ([]*user.User, error) {
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE email = $1 AND deleted_at IS NULL`,
+		`SELECT id, email, password_hash, last_name, first_name, patronymic, created_at
+		 FROM users WHERE email = $1 AND deleted_at IS NULL`,
 		email,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.LastName, &u.FirstName, &u.Patronymic, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
 	}
@@ -71,9 +72,10 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.Us
 func (r *UserRepository) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE id = $1 AND deleted_at IS NULL`,
+		`SELECT id, email, password_hash, last_name, first_name, patronymic, created_at
+		 FROM users WHERE id = $1 AND deleted_at IS NULL`,
 		id,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.LastName, &u.FirstName, &u.Patronymic, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
 	}

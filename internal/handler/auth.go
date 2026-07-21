@@ -144,6 +144,13 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}}})
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": user.UserPreview{
+		ID:         u.ID,
+		Email:      u.Email,
+		LastName:   u.LastName,
+		FirstName:  u.FirstName,
+		Patronymic: u.Patronymic,
+		CreatedAt:  u.CreatedAt,
+	}}})
 }
 
