@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -27,13 +28,16 @@ func getenv(key, fallback string) string {
 func main() {
 	_ = godotenv.Load()
 
-	defaultDSN := fmt.Sprintf("pgx5://%s:%s@%s:%s/%s?sslmode=disable",
-		getenv("DB_USER", "postgres"),
-		getenv("DB_PASSWORD", "postgres"),
-		getenv("DB_HOST", "localhost"),
-		getenv("DB_PORT", "5432"),
-		getenv("DB_NAME", "auth-db"),
-	)
+	// url.UserPassword экранирует спецсимволы (/, @, + и т.д.) в userinfo —
+	// без этого сгенерированный `openssl rand -base64` пароль может сломать парсинг DSN
+	defaultDSNURL := url.URL{
+		Scheme:   "pgx5",
+		User:     url.UserPassword(getenv("DB_USER", "postgres"), getenv("DB_PASSWORD", "postgres")),
+		Host:     fmt.Sprintf("%s:%s", getenv("DB_HOST", "localhost"), getenv("DB_PORT", "5432")),
+		Path:     "/" + getenv("DB_NAME", "auth-db"),
+		RawQuery: "sslmode=disable",
+	}
+	defaultDSN := defaultDSNURL.String()
 	dsn := flag.String("dsn", defaultDSN, "database DSN")
 	flag.Parse()
 

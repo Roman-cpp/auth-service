@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -52,10 +53,10 @@ func Load() (*Config, error) {
 			DSN: buildDSN(),
 		},
 		JWT: JWTConfig{
-			Secret:          mustGetEnv("JWT_SECRET"),
-			AccessTokenTTL:  parseDuration("JWT_ACCESS_TTL", 15*time.Minute),
-			RefreshTokenTTL: parseDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
-			CookieDomain:    getEnv("COOKIE_DOMAIN", ""),
+			Secret:           mustGetEnv("JWT_SECRET"),
+			AccessTokenTTL:   parseDuration("JWT_ACCESS_TTL", 15*time.Minute),
+			RefreshTokenTTL:  parseDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+			CookieDomain:     getEnv("COOKIE_DOMAIN", ""),
 			CookieSecure:     getEnv("COOKIE_SECURE", "true") == "true",
 			CookiePathPrefix: getEnv("COOKIE_PATH_PREFIX", "/api/auth"),
 		},
@@ -74,7 +75,17 @@ func buildDSN() string {
 	user := getEnv("DB_USER", "postgres")
 	pass := getEnv("DB_PASSWORD", "postgres")
 	name := getEnv("DB_NAME", "auth-db")
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, pass, host, port, name)
+
+	// user.UserPassword экранирует спецсимволы (/, @, + и т.д.) в userinfo —
+	// без этого сгенерированный `openssl rand -base64` пароль может сломать парсинг DSN
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, pass),
+		Host:     fmt.Sprintf("%s:%s", host, port),
+		Path:     "/" + name,
+		RawQuery: "sslmode=disable",
+	}
+	return u.String()
 }
 
 func getEnv(key, fallback string) string {

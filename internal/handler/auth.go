@@ -144,6 +144,9 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// gateway's auth_request reads this header to propagate the identity to downstream services
+	w.Header().Set("X-User-Id", u.ID)
+
 	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": user.UserPreview{
 		ID:         u.ID,
 		Email:      u.Email,
