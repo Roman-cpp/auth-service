@@ -33,9 +33,15 @@ services:
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-auth-db}
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret-at-least-32-chars}
+      JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH:-/etc/sleipnir/jwt_private.pem}
+      JWT_ISSUER: ${JWT_ISSUER:-sleipnir-auth}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-trading-backend,keys-service}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-168h}
+    volumes:
+      # Mount the RSA keypair generated via `go run ./cmd/genkey -out ./secrets`.
+      # The private key must never be baked into the image.
+      - ./secrets:/etc/sleipnir:ro
     ports:
       - "8085:${SERVICE_PORT:-8080}"
 

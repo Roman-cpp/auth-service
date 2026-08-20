@@ -7,12 +7,16 @@ import (
 	"github.com/krypton/auth-service/internal/handler"
 )
 
-func NewRouter(r *chi.Mux, authH *handler.AuthHandler, userH *handler.UserHandler, authMw func(http.Handler) http.Handler) {
+func NewRouter(r *chi.Mux, authH *handler.AuthHandler, userH *handler.UserHandler, jwksH *handler.JWKSHandler, authMw func(http.Handler) http.Handler) {
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"name": "auth", "status":"ok"}`))
 	})
+
+	// Public key distribution for offline token verification by consumers.
+	r.Get("/.well-known/jwks.json", jwksH.JWKS)
+	r.Get("/.well-known/jwt_public.pem", jwksH.PublicPEM)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
@@ -31,6 +35,7 @@ func NewRouter(r *chi.Mux, authH *handler.AuthHandler, userH *handler.UserHandle
 		r.Route("/users", func(r chi.Router) {
 			r.Use(authMw)
 			r.Get("/", userH.GetUsers)
+			r.Get("/me", userH.GetMe)
 			r.Get("/{id}", userH.GetUserByID)
 			r.Delete("/{id}", userH.DeleteUser)
 		})

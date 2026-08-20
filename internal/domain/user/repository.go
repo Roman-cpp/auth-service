@@ -10,6 +10,7 @@ type Repository interface {
 	GetAll(ctx context.Context) ([]*User, error)
 	GetByID(ctx context.Context, id UserID) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
+	UpdateLastLogin(ctx context.Context, id UserID) error
 	SoftDelete(ctx context.Context, id UserID) error
 	SaveRefreshToken(ctx context.Context, userID UserID, token string, expiresAt time.Time) error
 	GetRefreshToken(ctx context.Context, token string) (*RefreshToken, error)

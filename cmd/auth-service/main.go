@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/handler"
+	"github.com/krypton/auth-service/internal/keys"
 	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/repository"
 	"github.com/krypton/auth-service/internal/router"
@@ -20,8 +21,15 @@ import (
 )
 
 func main() {
-	cfg, _ := config.Load()
-	
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config load: %v", err)
+	}
+
+	keySet, err := keys.Load(cfg.JWT.PrivateKeyPath, cfg.JWT.AdditionalPublicKeyPaths)
+	if err != nil {
+		log.Fatalf("load signing keys: %v", err)
+	}
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, cfg.Database.DSN)
@@ -29,17 +37,18 @@ func main() {
 		log.Fatalf("db connect: %v", err)
 	}
 	defer pool.Close()
-	
+
 
 	userRepo := repository.NewUserRepository(pool)
-	authSvc := service.NewAuthService(userRepo, cfg)
+	authSvc := service.NewAuthService(userRepo, cfg, keySet)
 	userSvc := service.NewUserService(userRepo)
 	authHandler := handler.NewAuthHandler(authSvc, cfg)
 	userHandler := handler.NewUserHandler(userSvc)
+	jwksHandler := handler.NewJWKSHandler(keySet)
 
 	r := chi.NewRouter()
 	authMiddleware := middleware.JWTAuth(authSvc)
-	router.NewRouter(r, authHandler, userHandler, authMiddleware)
+	router.NewRouter(r, authHandler, userHandler, jwksHandler, authMiddleware)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Service.Port,

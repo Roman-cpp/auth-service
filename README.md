@@ -15,28 +15,49 @@
 cp .env.example .env
 ```
 
-Обязательно задайте `JWT_SECRET` — сервис не запустится без него:
+Токены подписываются **RS256**. Сгенерируйте RSA-пару — приватный ключ
+остаётся в сервисе, `jwt_public.pem` раздаётся потребителям
+(`trading-backend`, `keys-service`), которые проверяют токены офлайн:
 
 ```bash
-# Генерация надёжного секрета
-openssl rand -hex 32
+# RSA-пара -> ./secrets/jwt_private.pem + ./secrets/jwt_public.pem
+go run ./cmd/genkey -out ./secrets
 ```
+
+Обязателен `JWT_PRIVATE_KEY_PATH` — без него сервис не запустится.
 
 Основные переменные `.env`:
 
-| Переменная       | По умолчанию                                    | Описание               |
-|------------------|-------------------------------------------------|------------------------|
-| `SERVICE_NAME`   | `auth-service`                                  | Имя сервиса            |
-| `SERVICE_ENV`    | `local`                                         | Окружение              |
-| `SERVICE_PORT`   | `8080`                                          | Порт внутри контейнера |
-| `DB_HOST`        | `postgres`                                      | Хост БД                |
-| `DB_PORT`        | `5432`                                          | Порт БД                |
-| `DB_USER`        | `postgres`                                      | Пользователь БД        |
-| `DB_PASSWORD`    | `postgres`                                      | Пароль БД              |
-| `DB_NAME`        | `auth-db`                                       | Имя базы данных        |
-| `JWT_SECRET`     | —                                               | **Обязателен**         |
-| `JWT_ACCESS_TTL` | `15m`                                           | TTL access-токена      |
-| `JWT_REFRESH_TTL`| `168h`                                          | TTL refresh-токена     |
+| Переменная                        | По умолчанию                  | Описание                                              |
+|-----------------------------------|-------------------------------|-------------------------------------------------------|
+| `SERVICE_NAME`                    | `auth-service`                | Имя сервиса                                           |
+| `SERVICE_ENV`                     | `local`                       | Окружение                                             |
+| `SERVICE_PORT`                    | `8080`                        | Порт внутри контейнера                                |
+| `DB_HOST`                         | `postgres`                    | Хост БД                                               |
+| `DB_PORT`                         | `5432`                        | Порт БД                                               |
+| `DB_USER`                         | `postgres`                    | Пользователь БД                                       |
+| `DB_PASSWORD`                     | `postgres`                    | Пароль БД                                             |
+| `DB_NAME`                         | `auth-db`                     | Имя базы данных                                       |
+| `JWT_PRIVATE_KEY_PATH`            | —                             | **Обязателен**. RSA-приватный ключ (PEM)              |
+| `JWT_ADDITIONAL_PUBLIC_KEY_PATHS` | —                             | Доп. публичные ключи для ротации (через запятую)      |
+| `JWT_ISSUER`                      | `sleipnir-auth`               | Claim `iss`                                           |
+| `JWT_AUDIENCE`                    | `trading-backend,keys-service`| Claim `aud` (массив)                                  |
+| `JWT_ACCESS_TTL`                  | `15m`                         | TTL access-токена                                     |
+| `JWT_REFRESH_TTL`                 | `168h`                        | TTL refresh-токена                                    |
+
+### Распространение публичного ключа
+
+Потребители получают ключ одним из способов:
+
+- `GET /.well-known/jwks.json` — JWKS с `kid` (предпочтительно);
+- `GET /.well-known/jwt_public.pem` — статический PKIX PEM.
+
+### Ротация ключей без даунтайма
+
+1. Сгенерировать новую пару, добавить **старый** публичный ключ в
+   `JWT_ADDITIONAL_PUBLIC_KEY_PATHS`, а новый приватный — в `JWT_PRIVATE_KEY_PATH`.
+2. Дождаться, пока все потребители подтянут новый ключ (JWKS отдаёт оба `kid`).
+3. Убрать старый ключ из `JWT_ADDITIONAL_PUBLIC_KEY_PATHS`.
 
 ### 2. Запуск
 

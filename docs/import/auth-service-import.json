@@ -1,0 +1,385 @@
+{
+	"doc": {
+		"name": "Sleipnir Auth-service API",
+		"version": "v1",
+		"desc": "REST API сервиса аутентификации Sleipnir: регистрация, вход (RS256 JWT в HttpOnly-cookie), ротация refresh-токена, управление пользователями и публикация публичных ключей (JWKS / PEM) для офлайн-проверки токенов потребителями.",
+		"tags": ["REST", "JSON", "JWT", "RS256"]
+	},
+	"groups": [
+		{
+			"label": "Auth",
+			"endpoints": [
+				{
+					"method": "POST",
+					"path": "/api/v1/auth/register",
+					"name": "Register",
+					"description": "Регистрирует нового пользователя. Пароль хэшируется bcrypt (cost 12). Email должен быть уникальным.",
+					"tags": ["public"],
+					"auth": false,
+					"queryParams": [],
+					"bodyParams": [
+						{ "name": "last_name", "type": "string", "required": true, "desc": "Фамилия", "default": "" },
+						{ "name": "first_name", "type": "string", "required": true, "desc": "Имя", "default": "" },
+						{ "name": "patronymic", "type": "string", "required": false, "desc": "Отчество (может отсутствовать)", "default": "" },
+						{ "name": "email", "type": "string", "required": true, "desc": "Email (уникальный, формат email)", "default": "" },
+						{ "name": "password", "type": "string", "required": true, "desc": "Пароль (мин. 8 символов)", "default": "" }
+					],
+					"responses": {
+						"201": {
+							"label": "201 Created",
+							"schema": [
+								{ "key": "data.id", "type": "uuid", "desc": "UUID нового пользователя", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+								{ "key": "data.email", "type": "string", "desc": "Email", "example": "\"alice@example.com\"" },
+								{ "key": "data.first_name", "type": "string", "desc": "Имя", "example": "\"Алиса\"" },
+								{ "key": "data.last_name", "type": "string", "desc": "Фамилия", "example": "\"Смирнова\"" },
+								{ "key": "data.patronymic", "type": "string", "desc": "Отчество (nullable)", "example": "null" },
+								{ "key": "data.created_at", "type": "datetime", "desc": "Дата регистрации (ISO 8601, UTC)", "example": "\"2026-01-15T08:30:00Z\"" }
+							],
+							"example": "{\n  \"data\": {\n    \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"email\": \"alice@example.com\",\n    \"first_name\": \"Алиса\",\n    \"last_name\": \"Смирнова\",\n    \"patronymic\": null,\n    \"created_at\": \"2026-01-15T08:30:00Z\"\n  }\n}"
+						},
+						"400": {
+							"label": "400 Bad Request",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки", "example": "\"bad_request\"" },
+								{ "key": "message", "type": "string", "desc": "Описание (ошибка валидации/парсинга)", "example": "\"Key: 'RegisterRequest.Password' Error:Field validation for 'Password' failed on the 'min' tag\"" }
+							],
+							"example": "{\n  \"code\": \"bad_request\",\n  \"message\": \"validation failed\"\n}"
+						},
+						"409": {
+							"label": "409 Conflict",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки", "example": "\"email_taken\"" },
+								{ "key": "message", "type": "string", "desc": "Описание ошибки", "example": "\"email already registered\"" }
+							],
+							"example": "{\n  \"code\": \"email_taken\",\n  \"message\": \"email already registered\"\n}"
+						}
+					}
+				},
+				{
+					"method": "POST",
+					"path": "/api/v1/auth/login",
+					"name": "Login",
+					"description": "Аутентификация по email + паролю. При успехе выставляет HttpOnly-cookie access_token (RS256 JWT) и refresh_token через заголовки Set-Cookie. Сами токены в теле НЕ возвращаются — тело содержит только профиль пользователя.",
+					"tags": ["public"],
+					"auth": false,
+					"queryParams": [],
+					"bodyParams": [
+						{ "name": "email", "type": "string", "required": true, "desc": "Email пользователя", "default": "" },
+						{ "name": "password", "type": "string", "required": true, "desc": "Пароль", "default": "" }
+					],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "data.user.id", "type": "uuid", "desc": "UUID пользователя", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+								{ "key": "data.user.email", "type": "string", "desc": "Email", "example": "\"alice@example.com\"" },
+								{ "key": "data.user.first_name", "type": "string", "desc": "Имя", "example": "\"Алиса\"" },
+								{ "key": "data.user.last_name", "type": "string", "desc": "Фамилия", "example": "\"Смирнова\"" },
+								{ "key": "data.user.created_at", "type": "datetime", "desc": "Дата регистрации", "example": "\"2026-01-15T08:30:00Z\"" }
+							],
+							"example": "{\n  \"data\": {\n    \"user\": {\n      \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n      \"email\": \"alice@example.com\",\n      \"first_name\": \"Алиса\",\n      \"last_name\": \"Смирнова\",\n      \"patronymic\": null,\n      \"created_at\": \"2026-01-15T08:30:00Z\"\n    }\n  }\n}"
+						},
+						"401": {
+							"label": "401 Unauthorized",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки", "example": "\"invalid_credentials\"" },
+								{ "key": "message", "type": "string", "desc": "Описание ошибки", "example": "\"invalid email or password\"" }
+							],
+							"example": "{\n  \"code\": \"invalid_credentials\",\n  \"message\": \"invalid email or password\"\n}"
+						}
+					}
+				},
+				{
+					"method": "POST",
+					"path": "/api/v1/auth/refresh",
+					"name": "Refresh",
+					"description": "Ротация токенов. Читает refresh_token из cookie, удаляет старый refresh-токен и выставляет новую пару access/refresh через Set-Cookie. Тело запроса не используется.",
+					"tags": ["public"],
+					"auth": false,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "data.message", "type": "string", "desc": "Статус операции", "example": "\"ok\"" }
+							],
+							"example": "{\n  \"data\": {\n    \"message\": \"ok\"\n  }\n}"
+						},
+						"401": {
+							"label": "401 Unauthorized",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки (unauthorized — нет cookie; invalid_token — просрочен/неизвестен)", "example": "\"invalid_token\"" },
+								{ "key": "message", "type": "string", "desc": "Описание ошибки", "example": "\"invalid or expired refresh token\"" }
+							],
+							"example": "{\n  \"code\": \"invalid_token\",\n  \"message\": \"invalid or expired refresh token\"\n}"
+						}
+					}
+				},
+				{
+					"method": "POST",
+					"path": "/api/v1/auth/logout",
+					"name": "Logout",
+					"description": "Удаляет refresh-токен из БД и очищает cookie access_token / refresh_token.",
+					"tags": ["auth-required"],
+					"auth": true,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "data.message", "type": "string", "desc": "Статус операции", "example": "\"logged out successfully\"" }
+							],
+							"example": "{\n  \"data\": {\n    \"message\": \"logged out successfully\"\n  }\n}"
+						}
+					}
+				},
+				{
+					"method": "GET",
+					"path": "/api/v1/auth/me",
+					"name": "Me",
+					"description": "Возвращает профиль текущего пользователя по access-токену (cookie access_token или заголовок Authorization: Bearer <jwt>).",
+					"tags": ["auth-required"],
+					"auth": true,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "data.user.id", "type": "uuid", "desc": "UUID пользователя", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+								{ "key": "data.user.email", "type": "string", "desc": "Email", "example": "\"alice@example.com\"" },
+								{ "key": "data.user.created_at", "type": "datetime", "desc": "Дата регистрации", "example": "\"2026-01-15T08:30:00Z\"" }
+							],
+							"example": "{\n  \"data\": {\n    \"user\": {\n      \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n      \"email\": \"alice@example.com\",\n      \"created_at\": \"2026-01-15T08:30:00Z\"\n    }\n  }\n}"
+						},
+						"401": {
+							"label": "401 Unauthorized",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки", "example": "\"unauthorized\"" },
+								{ "key": "message", "type": "string", "desc": "Описание ошибки", "example": "\"unauthorized\"" }
+							],
+							"example": "{\n  \"code\": \"unauthorized\",\n  \"message\": \"unauthorized\"\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"label": "Users",
+			"endpoints": [
+				{
+					"method": "GET",
+					"path": "/api/v1/users",
+					"name": "List users",
+					"description": "Возвращает список активных (не удалённых) пользователей, отсортированный по дате создания (новые сверху).",
+					"tags": ["auth-required"],
+					"auth": true,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "data[].id", "type": "uuid", "desc": "UUID пользователя", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+								{ "key": "data[].email", "type": "string", "desc": "Email", "example": "\"alice@example.com\"" },
+								{ "key": "data[].created_at", "type": "datetime", "desc": "Дата регистрации", "example": "\"2026-01-15T08:30:00Z\"" }
+							],
+							"example": "{\n  \"data\": [\n    {\n      \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n      \"email\": \"alice@example.com\",\n      \"created_at\": \"2026-01-15T08:30:00Z\"\n    }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"method": "GET",
+					"path": "/api/v1/users/{id}",
+					"name": "Get user",
+					"description": "Возвращает профиль пользователя по UUID.",
+					"tags": ["auth-required"],
+					"auth": true,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "data.id", "type": "uuid", "desc": "UUID пользователя", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+								{ "key": "data.email", "type": "string", "desc": "Email", "example": "\"alice@example.com\"" },
+								{ "key": "data.created_at", "type": "datetime", "desc": "Дата регистрации", "example": "\"2026-01-15T08:30:00Z\"" }
+							],
+							"example": "{\n  \"data\": {\n    \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"email\": \"alice@example.com\",\n    \"created_at\": \"2026-01-15T08:30:00Z\"\n  }\n}"
+						},
+						"404": {
+							"label": "404 Not Found",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки", "example": "\"not_found\"" },
+								{ "key": "message", "type": "string", "desc": "Описание ошибки", "example": "\"user not found\"" }
+							],
+							"example": "{\n  \"code\": \"not_found\",\n  \"message\": \"user not found\"\n}"
+						}
+					}
+				},
+				{
+					"method": "DELETE",
+					"path": "/api/v1/users/{id}",
+					"name": "Delete user",
+					"description": "Мягко удаляет пользователя (soft delete — проставляет deleted_at). Необратимо для клиента.",
+					"tags": ["auth-required", "destructive"],
+					"auth": true,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"204": {
+							"label": "204 No Content",
+							"schema": [],
+							"example": ""
+						},
+						"404": {
+							"label": "404 Not Found",
+							"schema": [
+								{ "key": "code", "type": "string", "desc": "Код ошибки", "example": "\"not_found\"" },
+								{ "key": "message", "type": "string", "desc": "Описание ошибки", "example": "\"user not found\"" }
+							],
+							"example": "{\n  \"code\": \"not_found\",\n  \"message\": \"user not found\"\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"label": "System",
+			"endpoints": [
+				{
+					"method": "GET",
+					"path": "/health",
+					"name": "Health",
+					"description": "Проверка доступности сервиса. Ответ без обёртки data.",
+					"tags": ["public"],
+					"auth": false,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "name", "type": "string", "desc": "Имя сервиса", "example": "\"auth\"" },
+								{ "key": "status", "type": "string", "desc": "Статус", "example": "\"ok\"" }
+							],
+							"example": "{\n  \"name\": \"auth\",\n  \"status\": \"ok\"\n}"
+						}
+					}
+				},
+				{
+					"method": "GET",
+					"path": "/.well-known/jwks.json",
+					"name": "JWKS",
+					"description": "Набор публичных ключей (JWKS) для офлайн-проверки RS256-токенов потребителями. Содержит активный ключ и любые ключи, оставленные валидными на время ротации (по kid).",
+					"tags": ["public"],
+					"auth": false,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "keys[].kty", "type": "string", "desc": "Тип ключа", "example": "\"RSA\"" },
+								{ "key": "keys[].use", "type": "string", "desc": "Назначение", "example": "\"sig\"" },
+								{ "key": "keys[].alg", "type": "string", "desc": "Алгоритм подписи", "example": "\"RS256\"" },
+								{ "key": "keys[].kid", "type": "string", "desc": "Идентификатор ключа (совпадает с kid в заголовке токена)", "example": "\"A67MaTF-RQDXBqoH0ZKkDw\"" },
+								{ "key": "keys[].n", "type": "string", "desc": "Модуль RSA (base64url)", "example": "\"wheLZZiAW3um...\"" },
+								{ "key": "keys[].e", "type": "string", "desc": "Экспонента RSA (base64url)", "example": "\"AQAB\"" }
+							],
+							"example": "{\n  \"keys\": [\n    {\n      \"kty\": \"RSA\",\n      \"use\": \"sig\",\n      \"alg\": \"RS256\",\n      \"kid\": \"A67MaTF-RQDXBqoH0ZKkDw\",\n      \"n\": \"wheLZZiAW3um...\",\n      \"e\": \"AQAB\"\n    }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"method": "GET",
+					"path": "/.well-known/jwt_public.pem",
+					"name": "Public key (PEM)",
+					"description": "Активный публичный ключ в формате PKIX/SPKI PEM (jwt_public.pem) для потребителей, загружающих один статический ключ. Content-Type: application/x-pem-file.",
+					"tags": ["public"],
+					"auth": false,
+					"queryParams": [],
+					"bodyParams": [],
+					"responses": {
+						"200": {
+							"label": "200 OK",
+							"schema": [
+								{ "key": "body", "type": "string", "desc": "PEM-блок публичного ключа", "example": "\"-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----\\n\"" }
+							],
+							"example": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...\n-----END PUBLIC KEY-----"
+						}
+					}
+				}
+			]
+		}
+	],
+	"entities": [
+		{
+			"name": "UserPreview",
+			"desc": "Публичное представление пользователя, возвращаемое API. На эндпоинтах /me, /users и /users/{id} заполняются только id, email и created_at; полный набор полей возвращает register.",
+			"fields": [
+				{ "name": "id", "type": "uuid", "req": true, "nullable": false, "desc": "Уникальный идентификатор пользователя", "note": "UUIDv4", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+				{ "name": "email", "type": "string", "req": true, "nullable": false, "desc": "Email-адрес (уникальный)", "note": "Формат RFC 5322", "example": "\"alice@example.com\"" },
+				{ "name": "first_name", "type": "string", "req": true, "nullable": false, "desc": "Имя", "note": "", "example": "\"Алиса\"" },
+				{ "name": "last_name", "type": "string", "req": true, "nullable": false, "desc": "Фамилия", "note": "", "example": "\"Смирнова\"" },
+				{ "name": "patronymic", "type": "string", "req": false, "nullable": true, "desc": "Отчество", "note": "Может отсутствовать", "example": "null" },
+				{ "name": "created_at", "type": "datetime", "req": true, "nullable": false, "desc": "Дата и время регистрации", "note": "ISO 8601, UTC", "example": "\"2026-01-15T08:30:00Z\"" }
+			]
+		},
+		{
+			"name": "AccessTokenClaims",
+			"desc": "Полезная нагрузка access-токена. Подписывается RS256 (заголовок содержит alg=RS256 и kid). Потребители проверяют токен офлайн по публичному ключу из JWKS.",
+			"fields": [
+				{ "name": "iss", "type": "string", "req": true, "nullable": false, "desc": "Издатель токена", "note": "Стабильно между окружениями", "example": "\"sleipnir-auth\"" },
+				{ "name": "aud", "type": "array", "req": true, "nullable": false, "desc": "Аудитория (массив). Потребитель сопоставляет любой элемент", "note": "", "example": "[\"trading-backend\", \"keys-service\"]" },
+				{ "name": "sub", "type": "string", "req": true, "nullable": false, "desc": "ID пользователя (subject)", "note": "Совпадает с user_id", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+				{ "name": "user_id", "type": "string", "req": true, "nullable": false, "desc": "ID пользователя (дубль sub для удобства)", "note": "", "example": "\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"" },
+				{ "name": "email", "type": "string", "req": false, "nullable": false, "desc": "Email пользователя", "note": "", "example": "\"alice@example.com\"" },
+				{ "name": "role", "type": "string", "req": false, "nullable": false, "desc": "Роль пользователя (RBAC)", "note": "Опускается, если пустая", "example": "\"user\"" },
+				{ "name": "iat", "type": "integer", "req": true, "nullable": false, "desc": "Время выпуска (Unix-секунды)", "note": "", "example": "1768464600" },
+				{ "name": "nbf", "type": "integer", "req": true, "nullable": false, "desc": "Действителен не ранее (Unix-секунды)", "note": "", "example": "1768464600" },
+				{ "name": "exp", "type": "integer", "req": true, "nullable": false, "desc": "Время истечения (Unix-секунды)", "note": "Обязателен; токен без exp отклоняется", "example": "1768465500" }
+			]
+		},
+		{
+			"name": "JWK",
+			"desc": "Один публичный ключ в JWKS-документе.",
+			"fields": [
+				{ "name": "kty", "type": "string", "req": true, "nullable": false, "desc": "Тип ключа", "note": "Всегда RSA", "example": "\"RSA\"" },
+				{ "name": "use", "type": "string", "req": true, "nullable": false, "desc": "Назначение ключа", "note": "Всегда sig", "example": "\"sig\"" },
+				{ "name": "alg", "type": "string", "req": true, "nullable": false, "desc": "Алгоритм", "note": "RS256", "example": "\"RS256\"" },
+				{ "name": "kid", "type": "string", "req": true, "nullable": false, "desc": "Идентификатор ключа", "note": "SHA-256 от DER публичного ключа, base64url", "example": "\"A67MaTF-RQDXBqoH0ZKkDw\"" },
+				{ "name": "n", "type": "string", "req": true, "nullable": false, "desc": "Модуль RSA", "note": "base64url", "example": "\"wheLZZiAW3um...\"" },
+				{ "name": "e", "type": "string", "req": true, "nullable": false, "desc": "Открытая экспонента RSA", "note": "base64url", "example": "\"AQAB\"" }
+			]
+		},
+		{
+			"name": "ErrorResponse",
+			"desc": "Единый формат ошибки.",
+			"fields": [
+				{ "name": "code", "type": "string", "req": true, "nullable": false, "desc": "Машиночитаемый код ошибки", "note": "bad_request, invalid_credentials, email_taken, unauthorized, invalid_token, not_found, internal_error", "example": "\"invalid_credentials\"" },
+				{ "name": "message", "type": "string", "req": true, "nullable": false, "desc": "Человекочитаемое описание", "note": "", "example": "\"invalid email or password\"" }
+			]
+		}
+	],
+	"environments": [
+		{
+			"env": "local",
+			"label": "Local (docker-compose)",
+			"baseUrl": "http://localhost:8100",
+			"prefix": "",
+			"value": [],
+			"accessToken": null
+		},
+		{
+			"env": "prod",
+			"label": "Production",
+			"baseUrl": "https://auth.sleipnir.example",
+			"prefix": "",
+			"value": [],
+			"accessToken": null
+		}
+	]
+}

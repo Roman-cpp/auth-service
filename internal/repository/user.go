@@ -59,9 +59,9 @@ func (r *UserRepository) GetAll(ctx context.Context) ([]*user.User, error) {
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE email = $1 AND deleted_at IS NULL`,
+		`SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1 AND deleted_at IS NULL`,
 		email,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
 	}
@@ -71,13 +71,22 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.Us
 func (r *UserRepository) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
 	u := &user.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE id = $1 AND deleted_at IS NULL`,
+		`SELECT id, email, password_hash, role, first_name, last_name, status, created_at, last_login_at
+		 FROM users WHERE id = $1 AND deleted_at IS NULL`,
 		id,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.Status, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
 	}
 	return u, err
+}
+
+func (r *UserRepository) UpdateLastLogin(ctx context.Context, id user.UserID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET last_login_at = NOW() WHERE id = $1`,
+		id,
+	)
+	return err
 }
 
 func (r *UserRepository) SoftDelete(ctx context.Context, id user.UserID) error {

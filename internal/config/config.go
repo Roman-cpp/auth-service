@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -26,7 +27,20 @@ type DatabaseConfig struct {
 }
 
 type JWTConfig struct {
-	Secret          string
+	// Issuer is the fixed `iss` claim. Must stay stable across environments —
+	// consumers hardcode it (sleipnir-auth).
+	Issuer string
+	// Audience is the `aud` claim, emitted as a JSON array. Consumers match
+	// any entry, so it carries every intended audience for the system.
+	Audience []string
+
+	// PrivateKeyPath points at the RSA private key (PKCS#1/PKCS#8 PEM) used to
+	// sign tokens with RS256. The private key never leaves this service.
+	PrivateKeyPath string
+	// AdditionalPublicKeyPaths are extra public keys kept valid for
+	// verification during a no-downtime key rotation.
+	AdditionalPublicKeyPaths []string
+
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
 	CookieDomain    string
@@ -47,11 +61,14 @@ func Load() (*Config, error) {
 			DSN: buildDSN(),
 		},
 		JWT: JWTConfig{
-			Secret:          mustGetEnv("JWT_SECRET"),
-			AccessTokenTTL:  parseDuration("JWT_ACCESS_TTL", 15*time.Minute),
-			RefreshTokenTTL: parseDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
-			CookieDomain:    getEnv("COOKIE_DOMAIN", ""),
-			CookieSecure:    getEnv("COOKIE_SECURE", "false") == "true",
+			Issuer:                   getEnv("JWT_ISSUER", "sleipnir-auth"),
+			Audience:                 parseList("JWT_AUDIENCE", []string{"trading-backend", "keys-service"}),
+			PrivateKeyPath:           mustGetEnv("JWT_PRIVATE_KEY_PATH"),
+			AdditionalPublicKeyPaths: parseList("JWT_ADDITIONAL_PUBLIC_KEY_PATHS", nil),
+			AccessTokenTTL:           parseDuration("JWT_ACCESS_TTL", 15*time.Minute),
+			RefreshTokenTTL:          parseDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+			CookieDomain:             getEnv("COOKIE_DOMAIN", ""),
+			CookieSecure:             getEnv("COOKIE_SECURE", "false") == "true",
 		},
 	}
 
@@ -84,6 +101,24 @@ func mustGetEnv(key string) string {
 		panic(fmt.Sprintf("required env variable %q is not set", key))
 	}
 	return v
+}
+
+// parseList reads a comma-separated env var into a trimmed, non-empty slice.
+func parseList(key string, fallback []string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }
 
 func parseDuration(key string, fallback time.Duration) time.Duration {

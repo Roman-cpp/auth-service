@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/krypton/auth-service/internal/config"
@@ -89,19 +90,21 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.SetTokenCookies(w, tokens)
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": u}})
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{
+		"user":          u,
+		"access_token":  tokens.AccessToken,
+		"refresh_token": tokens.RefreshToken,
+	}})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Refresh cookies: %v", r.Cookies())
-
-	cookie, err := r.Cookie("refresh_token")
-	if err != nil {
+	refreshToken := extractRefreshToken(r)
+	if refreshToken == "" {
 		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "unauthorized", Message: "refresh token not found"})
 		return
 	}
 
-	tokens, err := h.svc.Refresh(r.Context(), &user.Refresh{RefreshToken: cookie.Value})
+	tokens, err := h.svc.Refresh(r.Context(), &user.Refresh{RefreshToken: refreshToken})
 	if errors.Is(err, service.ErrInvalidToken) {
 		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "invalid_token", Message: "invalid or expired refresh token"})
 		return
@@ -113,12 +116,33 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.SetTokenCookies(w, tokens)
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]string{"message": "ok"}})
+	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{
+		"access_token":  tokens.AccessToken,
+		"refresh_token": tokens.RefreshToken,
+	}})
+}
+
+// extractRefreshToken resolves the refresh token from, in order of priority:
+// the refresh_token cookie, the X-Refresh-Token header, or an
+// "Authorization: Bearer <token>" header — letting non-cookie clients refresh.
+func extractRefreshToken(r *http.Request) string {
+	if cookie, err := r.Cookie("refresh_token"); err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	if header := r.Header.Get("X-Refresh-Token"); header != "" {
+		return strings.TrimSpace(header)
+	}
+	if header := r.Header.Get("Authorization"); header != "" {
+		if parts := strings.SplitN(header, " ", 2); len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie("refresh_token"); err == nil {
-		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+	if refreshToken := extractRefreshToken(r); refreshToken != "" {
+		if err := h.svc.Logout(r.Context(), refreshToken); err != nil {
 			log.Printf("Logout: %v", err)
 		}
 	}
