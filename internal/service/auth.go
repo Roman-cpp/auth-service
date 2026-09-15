@@ -2,76 +2,250 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/mailer"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var (
-	ErrInvalidCredentials = errors.New("invalid email or password")
-	ErrInvalidToken       = errors.New("invalid or expired token")
-)
+const passwordBcryptCost = 12
+
+// dummyPasswordHash выравнивает время ответа для несуществующих аккаунтов.
+// Без него /auth/login отвечает заметно быстрее, когда почты нет в базе,
+// и по одному только таймингу перебирается список зарегистрированных адресов.
+// Считается лениво и один раз: bcrypt cost 12 — это ~0.3 с.
+var dummyPasswordHash = sync.OnceValue(func() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("nexus-timing-equalizer"), passwordBcryptCost)
+	if err != nil {
+		// Невозможно при валидном cost; паника здесь честнее тихого
+		// отключения защиты от тайминг-атаки.
+		panic("bcrypt: cannot build dummy hash: " + err.Error())
+	}
+	return hash
+})
 
 type AuthService struct {
-	repo user.Repository
-	cfg  *config.Config
+	repo   user.Repository
+	tokens *TokenIssuer
+	codes  *CodeService
 }
 
-func NewAuthService(repo user.Repository, cfg *config.Config) *AuthService {
-	return &AuthService{repo: repo, cfg: cfg}
+func NewAuthService(repo user.Repository, tokens *TokenIssuer, codes *CodeService) *AuthService {
+	return &AuthService{repo: repo, tokens: tokens, codes: codes}
 }
 
-func (s *AuthService) Register(ctx context.Context, dto *user.CreateDTO) (*user.UserPreview, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(dto.Password), 12)
+// ---- регистрация и подтверждение почты ----
+
+// Register заводит пользователя без права входа и отправляет код на почту.
+// Сессия здесь не выдаётся: до подтверждения адреса аккаунтом пользоваться
+// нельзя.
+func (s *AuthService) Register(ctx context.Context, req *user.Register) (*user.RegisterResult, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), passwordBcryptCost)
 	if err != nil {
 		return nil, err
 	}
 
-	dto.PasswordHash = string(hash)
-
-	u, err := s.repo.Create(ctx, *dto)
+	u, err := s.repo.Upsert(ctx, user.CreateDTO{
+		LastName:     req.LastName,
+		FirstName:    req.FirstName,
+		Patronymic:   req.Patronymic,
+		Email:        normalizeEmail(req.Email),
+		PasswordHash: string(hash),
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	return toUserResponse(u), nil
+	challenge, err := s.codes.Issue(ctx, u, user.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
+	if err != nil {
+		return nil, err
+	}
+
+	return &user.RegisterResult{User: user.NewUserPreview(u), Challenge: challenge}, nil
 }
 
-func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.TokenResponse, *user.UserPreview, error) {
-	u, err := s.repo.GetByEmail(ctx, req.Email)
+// ResendEmailVerification никогда не сообщает, есть ли такой аккаунт: для
+// неизвестного и уже подтверждённого адреса возвращается такой же ответ,
+// просто без письма.
+func (s *AuthService) ResendEmailVerification(ctx context.Context, email string) (*user.CodeChallenge, error) {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(email))
 	if errors.Is(err, user.ErrNotFound) {
-		return nil, nil, ErrInvalidCredentials
+		return s.codes.Challenge(time.Now()), nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	if u.EmailVerified() {
+		return s.codes.Challenge(time.Now()), nil
+	}
+
+	return s.codes.Issue(ctx, u, user.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
+}
+
+// VerifyEmail подтверждает адрес и сразу открывает сессию — заставлять
+// пользователя тут же логиниться ещё раз незачем, оба фактора уже предъявлены.
+func (s *AuthService) VerifyEmail(ctx context.Context, req *user.VerifyCode) (*user.SessionResult, error) {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
+	if errors.Is(err, user.ErrNotFound) {
+		// Тот же ответ, что и на неверный код: иначе эндпоинт становится
+		// способом проверять, зарегистрирован ли адрес.
+		return nil, user.ErrCodeInvalid
+	}
+	if err != nil {
+		return nil, err
+	}
+	if u.EmailVerified() {
+		return nil, user.ErrEmailVerified
+	}
+
+	if err := s.codes.Verify(ctx, u.ID, user.CodePurposeEmailVerify, req.Code); err != nil {
+		return nil, err
+	}
+	if err := s.repo.MarkEmailVerified(ctx, u.ID); err != nil {
+		return nil, err
+	}
+	u.EmailVerifiedAt = ptr(time.Now())
+
+	return s.session(ctx, u)
+}
+
+// ---- вход ----
+
+// Login проверяет первый фактор. Если у аккаунта включён второй, сессия не
+// выдаётся: клиент получает MFA-токен и код на почту.
+func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.LoginResult, error) {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
+	if errors.Is(err, user.ErrNotFound) {
+		// Хеш всё равно считаем — ради одинакового времени ответа.
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
+		return nil, user.ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
-		return nil, nil, ErrInvalidCredentials
+		return nil, user.ErrInvalidCredentials
 	}
 
-	tokens, err := s.issueTokenPair(ctx, u)
+	// Проверяется после пароля: иначе по ответу можно было бы узнать, что
+	// адрес зарегистрирован, не зная пароля.
+	if !u.EmailVerified() {
+		return nil, user.ErrEmailNotVerified
+	}
+
+	if !u.TwoFactorEnabled {
+		tokens, err := s.tokens.IssueSession(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		return &user.LoginResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
+	}
+
+	challenge, err := s.codes.Issue(ctx, u, user.CodePurposeMFALogin, mailer.TemplateLoginCode)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	mfaToken, err := s.tokens.IssueMFAToken(u)
+	if err != nil {
+		return nil, err
 	}
 
-	return tokens, toUserResponse(u), nil
+	return &user.LoginResult{User: user.NewUserPreview(u), MFAToken: mfaToken, Challenge: challenge}, nil
 }
 
-func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.TokenResponse, error) {
-	tokenHash := hashRefreshToken(req.RefreshToken)
+func (s *AuthService) VerifyMFA(ctx context.Context, mfaToken string, code string) (*user.SessionResult, error) {
+	u, err := s.userFromMFAToken(ctx, mfaToken)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.codes.Verify(ctx, u.ID, user.CodePurposeMFALogin, code); err != nil {
+		return nil, err
+	}
+	return s.session(ctx, u)
+}
+
+// ResendMFACode заодно перевыпускает MFA-токен: иначе окно на ввод кода
+// закончилось бы раньше самого кода.
+func (s *AuthService) ResendMFACode(ctx context.Context, mfaToken string) (string, *user.CodeChallenge, error) {
+	u, err := s.userFromMFAToken(ctx, mfaToken)
+	if err != nil {
+		return "", nil, err
+	}
+
+	challenge, err := s.codes.Issue(ctx, u, user.CodePurposeMFALogin, mailer.TemplateLoginCode)
+	if err != nil {
+		return "", nil, err
+	}
+	refreshed, err := s.tokens.IssueMFAToken(u)
+	if err != nil {
+		return "", nil, err
+	}
+	return refreshed, challenge, nil
+}
+
+// ---- управление вторым фактором ----
+
+// StartEnableTwoFactor требует пароль: включать второй фактор не должен уметь
+// тот, кто просто перехватил активную сессию.
+func (s *AuthService) StartEnableTwoFactor(ctx context.Context, id user.UserID, password string) (*user.CodeChallenge, error) {
+	u, err := s.authenticateByPassword(ctx, id, password)
+	if err != nil {
+		return nil, err
+	}
+	if u.TwoFactorEnabled {
+		return nil, user.ErrTwoFactorState
+	}
+	return s.codes.Issue(ctx, u, user.CodePurposeMFAEnable, mailer.TemplateEnableTwoFactor)
+}
+
+// ConfirmEnableTwoFactor включает второй фактор только после успешного ввода
+// кода — так проверяется, что почта действительно доступна пользователю.
+func (s *AuthService) ConfirmEnableTwoFactor(ctx context.Context, id user.UserID, code string) (*user.UserPreview, error) {
+	u, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.codes.Verify(ctx, u.ID, user.CodePurposeMFAEnable, code); err != nil {
+		return nil, err
+	}
+	if err := s.repo.SetTwoFactorEnabled(ctx, u.ID, true); err != nil {
+		if errors.Is(err, user.ErrNotFound) {
+			return nil, user.ErrTwoFactorState
+		}
+		return nil, err
+	}
+	u.TwoFactorEnabled = true
+	return user.NewUserPreview(u), nil
+}
+
+func (s *AuthService) DisableTwoFactor(ctx context.Context, id user.UserID, password string) (*user.UserPreview, error) {
+	u, err := s.authenticateByPassword(ctx, id, password)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.SetTwoFactorEnabled(ctx, u.ID, false); err != nil {
+		if errors.Is(err, user.ErrNotFound) {
+			return nil, user.ErrTwoFactorState
+		}
+		return nil, err
+	}
+	u.TwoFactorEnabled = false
+	return user.NewUserPreview(u), nil
+}
+
+// ---- сессии ----
+
+func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*user.TokenResponse, error) {
+	tokenHash := HashRefreshToken(refreshToken)
 
 	rt, err := s.repo.GetRefreshToken(ctx, tokenHash)
 	if errors.Is(err, user.ErrNotFound) {
-		return nil, ErrInvalidToken
+		return nil, user.ErrInvalidToken
 	}
 	if err != nil {
 		return nil, err
@@ -81,18 +255,18 @@ func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.Tok
 	// отзываем все сессии пользователя.
 	if rt.RevokedAt != nil {
 		_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
-		return nil, ErrInvalidToken
+		return nil, user.ErrInvalidToken
 	}
 
 	if time.Now().After(rt.ExpiresAt) {
 		_ = s.repo.DeleteRefreshToken(ctx, tokenHash)
-		return nil, ErrInvalidToken
+		return nil, user.ErrInvalidToken
 	}
 
 	u, err := s.repo.GetByID(ctx, rt.UserID)
 	if errors.Is(err, user.ErrNotFound) {
 		_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
-		return nil, ErrInvalidToken
+		return nil, user.ErrInvalidToken
 	}
 	if err != nil {
 		return nil, err
@@ -102,98 +276,63 @@ func (s *AuthService) Refresh(ctx context.Context, req *user.Refresh) (*user.Tok
 		if errors.Is(err, user.ErrNotFound) {
 			// Токен успели отозвать параллельно — тоже reuse.
 			_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
-			return nil, ErrInvalidToken
+			return nil, user.ErrInvalidToken
 		}
 		return nil, err
 	}
 
-	return s.issueTokenPair(ctx, u)
+	return s.tokens.IssueSession(ctx, u)
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
-	return s.repo.DeleteRefreshToken(ctx, hashRefreshToken(refreshToken))
+	return s.repo.DeleteRefreshToken(ctx, HashRefreshToken(refreshToken))
 }
 
-func (s *AuthService) ValidateAccessToken(tokenStr string) (*user.Claims, error) {
-	claims := &user.Claims{}
-	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, ErrInvalidToken
-		}
-		return []byte(s.cfg.JWT.Secret), nil
-	})
-	if err != nil || !token.Valid {
-		return nil, ErrInvalidToken
-	}
-	return claims, nil
+func (s *AuthService) ValidateAccessToken(token string) (*user.Claims, error) {
+	return s.tokens.ParseAccessToken(token)
 }
 
 func (s *AuthService) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
 	return s.repo.GetByID(ctx, id)
 }
 
-// ---- internal helpers ----
+// ---- helpers ----
 
-func (s *AuthService) issueTokenPair(ctx context.Context, u *user.User) (*user.TokenResponse, error) {
-	accessToken, expiresAt, err := s.generateAccessToken(u)
+func (s *AuthService) session(ctx context.Context, u *user.User) (*user.SessionResult, error) {
+	tokens, err := s.tokens.IssueSession(ctx, u)
 	if err != nil {
 		return nil, err
 	}
+	return &user.SessionResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
+}
 
-	refreshToken, err := generateRefreshToken()
+func (s *AuthService) userFromMFAToken(ctx context.Context, mfaToken string) (*user.User, error) {
+	claims, err := s.tokens.ParseMFAToken(mfaToken)
 	if err != nil {
 		return nil, err
 	}
-	refreshExpiresAt := time.Now().Add(s.cfg.JWT.RefreshTokenTTL)
-	if err := s.repo.SaveRefreshToken(ctx, u.ID, hashRefreshToken(refreshToken), refreshExpiresAt); err != nil {
+	u, err := s.repo.GetByID(ctx, claims.UserID)
+	if errors.Is(err, user.ErrNotFound) {
+		return nil, user.ErrInvalidToken
+	}
+	return u, err
+}
+
+func (s *AuthService) authenticateByPassword(ctx context.Context, id user.UserID, password string) (*user.User, error) {
+	u, err := s.repo.GetByID(ctx, id)
+	if err != nil {
 		return nil, err
 	}
-
-	return &user.TokenResponse{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresIn:    int64(time.Until(expiresAt).Seconds()),
-	}, nil
-}
-
-func (s *AuthService) generateAccessToken(u *user.User) (string, time.Time, error) {
-	expiresAt := time.Now().Add(s.cfg.JWT.AccessTokenTTL)
-	claims := &user.Claims{
-		UserID: u.ID,
-		Email:  u.Email,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Subject:   u.ID,
-		},
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
+		return nil, user.ErrInvalidCredentials
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(s.cfg.JWT.Secret))
-	return signed, expiresAt, err
+	return u, nil
 }
 
-func generateRefreshToken() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+// normalizeEmail: без него Foo@example.com и foo@example.com становятся
+// разными аккаунтами, а уникальный индекс по email их не ловит.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
-// В БД хранится только SHA-256 от токена: утечка таблицы refresh_tokens
-// не даёт угнать сессии.
-func hashRefreshToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
-
-func toUserResponse(u *user.User) *user.UserPreview {
-	return &user.UserPreview{
-		ID:         u.ID,
-		Email:      u.Email,
-		FirstName:  u.FirstName,
-		LastName:   u.LastName,
-		Patronymic: u.Patronymic,
-		CreatedAt:  u.CreatedAt,
-	}
-}
+func ptr[T any](v T) *T { return &v }

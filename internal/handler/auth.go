@@ -1,159 +1,259 @@
 package handler
 
 import (
-	"encoding/json"
-	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/service"
-	"github.com/krypton/auth-service/pkg/httputil"
 )
 
-type RegisterRequest struct {
-	LastName   string  `json:"last_name"    validate:"required"`
-	FirstName  string  `json:"first_name"    validate:"required"`
-	Patronymic *string `json:"patronymic"    validate:""`
-	Email      string  `json:"email"    validate:"required,email"`
-	// max=72 — предел bcrypt: более длинный пароль Go-реализация отвергает с ошибкой
-	Password   string  `json:"password" validate:"required,min=8,max=72"`
-}
-
-var validate = validator.New()
-
 type AuthHandler struct {
+	base
 	svc     *service.AuthService
 	cookies *CookieManager
 }
 
-func NewAuthHandler(svc *service.AuthService, cfg *config.Config) *AuthHandler {
-	return &AuthHandler{svc: svc, cookies: NewCookieManager(cfg)}
+func NewAuthHandler(svc *service.AuthService, cfg *config.Config, log *slog.Logger) *AuthHandler {
+	return &AuthHandler{
+		base:    base{log: log},
+		svc:     svc,
+		cookies: NewCookieManager(cfg),
+	}
 }
 
+// Register — первый шаг регистрации: аккаунт заведён, код ушёл на почту,
+// сессии нет. Куки здесь намеренно не выставляются.
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
-		return
-	}
-	if err := validate.Struct(&req); err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
+	req, ok := decodeJSON[user.Register](w, r)
+	if !ok {
 		return
 	}
 
-	dto := user.CreateDTO{
-		FirstName:  req.FirstName,
-		LastName:   req.LastName,
-		Patronymic: req.Patronymic,
-		Email:      req.Email,
-		Password:   req.Password,
-	}
-
-	u, err := h.svc.Register(r.Context(), &dto)
-	if errors.Is(err, user.ErrEmailTaken) {
-		httputil.WriteJSON(w, http.StatusConflict, httputil.ErrorResponse{Code: "email_taken", Message: "email already registered"})
-		return
-	}
+	result, err := h.svc.Register(r.Context(), req)
 	if err != nil {
-		log.Printf("Register: %v", err)
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
+		h.fail(w, r, "register", err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, httputil.Response{Data: u})
+	writeData(w, http.StatusCreated, map[string]any{
+		"user":         result.User,
+		"verification": result.Challenge,
+	})
 }
 
-func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	var req user.Login
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
-		return
-	}
-	if err := validate.Struct(&req); err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, httputil.ErrorResponse{Code: "bad_request", Message: err.Error()})
+// VerifyEmail — второй шаг регистрации. Успех сразу открывает сессию.
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.VerifyCode](w, r)
+	if !ok {
 		return
 	}
 
-	tokens, u, err := h.svc.Login(r.Context(), &req)
-	if errors.Is(err, service.ErrInvalidCredentials) {
-		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "invalid_credentials", Message: "invalid email or password"})
-		return
-	}
+	result, err := h.svc.VerifyEmail(r.Context(), req)
 	if err != nil {
-		log.Printf("Login: %v", err)
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
+		h.fail(w, r, "verify_email", err)
 		return
 	}
 
-	h.cookies.SetTokenCookies(w, tokens)
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": u}})
+	h.cookies.SetSessionCookies(w, result.Tokens)
+	writeData(w, http.StatusOK, map[string]any{"user": result.User})
+}
+
+// ResendCode отвечает одинаково для известного и неизвестного адреса —
+// иначе эндпоинт превращается в проверку «есть ли такой аккаунт».
+func (h *AuthHandler) ResendCode(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.ResendCode](w, r)
+	if !ok {
+		return
+	}
+
+	challenge, err := h.svc.ResendEmailVerification(r.Context(), req.Email)
+	if err != nil {
+		h.fail(w, r, "resend_code", err)
+		return
+	}
+
+	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+}
+
+// Login отвечает одной из двух форм: либо сессия открыта, либо требуется
+// второй фактор. Во втором случае в ответе нет данных пользователя — до
+// ввода кода раскрывать их нечего.
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.Login](w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.Login(r.Context(), req)
+	if err != nil {
+		h.fail(w, r, "login", err)
+		return
+	}
+
+	if result.MFARequired() {
+		h.cookies.SetMFACookie(w, result.MFAToken)
+		writeData(w, http.StatusOK, map[string]any{
+			"mfa_required": true,
+			"verification": result.Challenge,
+		})
+		return
+	}
+
+	h.cookies.SetSessionCookies(w, result.Tokens)
+	writeData(w, http.StatusOK, map[string]any{
+		"mfa_required": false,
+		"user":         result.User,
+	})
+}
+
+func (h *AuthHandler) VerifyMFA(w http.ResponseWriter, r *http.Request) {
+	token := cookieValue(r, mfaTokenCookie)
+	if token == "" {
+		h.fail(w, r, "verify_mfa", user.ErrInvalidToken)
+		return
+	}
+
+	req, ok := decodeJSON[user.MFAVerify](w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.VerifyMFA(r.Context(), token, req.Code)
+	if err != nil {
+		h.fail(w, r, "verify_mfa", err)
+		return
+	}
+
+	h.cookies.SetSessionCookies(w, result.Tokens)
+	writeData(w, http.StatusOK, map[string]any{"user": result.User})
+}
+
+func (h *AuthHandler) ResendMFA(w http.ResponseWriter, r *http.Request) {
+	token := cookieValue(r, mfaTokenCookie)
+	if token == "" {
+		h.fail(w, r, "resend_mfa", user.ErrInvalidToken)
+		return
+	}
+
+	refreshed, challenge, err := h.svc.ResendMFACode(r.Context(), token)
+	if err != nil {
+		h.fail(w, r, "resend_mfa", err)
+		return
+	}
+
+	// Окно на ввод кода продлевается вместе с самим кодом.
+	h.cookies.SetMFACookie(w, refreshed)
+	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("refresh_token")
-	if err != nil {
-		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "unauthorized", Message: "refresh token not found"})
+	token := cookieValue(r, refreshTokenCookie)
+	if token == "" {
+		h.fail(w, r, "refresh", user.ErrInvalidToken)
 		return
 	}
 
-	tokens, err := h.svc.Refresh(r.Context(), &user.Refresh{RefreshToken: cookie.Value})
-	if errors.Is(err, service.ErrInvalidToken) {
-		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "invalid_token", Message: "invalid or expired refresh token"})
-		return
-	}
+	tokens, err := h.svc.Refresh(r.Context(), token)
 	if err != nil {
-		log.Printf("Refresh: %v", err)
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
+		h.fail(w, r, "refresh", err)
 		return
 	}
 
-	h.cookies.SetTokenCookies(w, tokens)
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]string{"message": "ok"}})
+	h.cookies.SetSessionCookies(w, tokens)
+	writeData(w, http.StatusOK, map[string]string{"message": "ok"})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie("refresh_token"); err == nil {
-		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
-			log.Printf("Logout: %v", err)
+	if token := cookieValue(r, refreshTokenCookie); token != "" {
+		if err := h.svc.Logout(r.Context(), token); err != nil {
+			// Сессию всё равно закрываем на клиенте: куки чистятся ниже.
+			h.log.ErrorContext(r.Context(), "logout", slog.Any("error", err))
 		}
 	}
 
-	h.cookies.ClearTokenCookies(w)
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]string{"message": "logged out successfully"}})
+	h.cookies.ClearSessionCookies(w)
+	writeData(w, http.StatusOK, map[string]string{"message": "logged out successfully"})
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(middleware.ContextKeyUserID).(string)
+	userID, ok := middleware.UserIDFrom(r.Context())
 	if !ok {
-		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "unauthorized", Message: "unauthorized"})
+		h.fail(w, r, "me", user.ErrInvalidToken)
 		return
 	}
 
 	u, err := h.svc.GetByID(r.Context(), userID)
-	if errors.Is(err, user.ErrNotFound) {
-		httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
-		return
-	}
 	if err != nil {
-		log.Printf("Me: %v", err)
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
+		h.fail(w, r, "me", err)
 		return
 	}
 
 	// gateway's auth_request reads this header to propagate the identity to downstream services
 	w.Header().Set("X-User-Id", u.ID)
-
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: map[string]any{"user": user.UserPreview{
-		ID:         u.ID,
-		Email:      u.Email,
-		LastName:   u.LastName,
-		FirstName:  u.FirstName,
-		Patronymic: u.Patronymic,
-		CreatedAt:  u.CreatedAt,
-	}}})
+	writeData(w, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
 }
 
+// ---- управление вторым фактором ----
+
+func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFrom(r.Context())
+	if !ok {
+		h.fail(w, r, "enable_2fa", user.ErrInvalidToken)
+		return
+	}
+	req, ok := decodeJSON[user.PasswordConfirm](w, r)
+	if !ok {
+		return
+	}
+
+	challenge, err := h.svc.StartEnableTwoFactor(r.Context(), userID, req.Password)
+	if err != nil {
+		h.fail(w, r, "enable_2fa", err)
+		return
+	}
+
+	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+}
+
+func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFrom(r.Context())
+	if !ok {
+		h.fail(w, r, "confirm_2fa", user.ErrInvalidToken)
+		return
+	}
+	req, ok := decodeJSON[user.MFAVerify](w, r)
+	if !ok {
+		return
+	}
+
+	u, err := h.svc.ConfirmEnableTwoFactor(r.Context(), userID, req.Code)
+	if err != nil {
+		h.fail(w, r, "confirm_2fa", err)
+		return
+	}
+
+	writeData(w, http.StatusOK, map[string]any{"user": u})
+}
+
+func (h *AuthHandler) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFrom(r.Context())
+	if !ok {
+		h.fail(w, r, "disable_2fa", user.ErrInvalidToken)
+		return
+	}
+	req, ok := decodeJSON[user.PasswordConfirm](w, r)
+	if !ok {
+		return
+	}
+
+	u, err := h.svc.DisableTwoFactor(r.Context(), userID, req.Password)
+	if err != nil {
+		h.fail(w, r, "disable_2fa", err)
+		return
+	}
+
+	writeData(w, http.StatusOK, map[string]any{"user": u})
+}

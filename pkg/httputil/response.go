@@ -10,15 +10,14 @@ type Response struct {
 }
 
 type PaginationResponse struct {
-	Data any `json:"data"`
+	Data       any         `json:"data"`
 	Pagination *Pagination `json:"pagination"`
 }
 
 type ErrorResponse struct {
-	Code string `json:"code"`
+	Code    string `json:"code"`
 	Message string `json:"message"`
 }
-
 
 type Pagination struct {
 	Total      int `json:"total"`

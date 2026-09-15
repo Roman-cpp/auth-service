@@ -1,22 +1,24 @@
 package handler
 
 import (
-	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/middleware"
 	"github.com/krypton/auth-service/internal/service"
-	"github.com/krypton/auth-service/pkg/httputil"
 )
 
 type UserHandler struct {
-	svc *service.UserService
+	base
+	svc     *service.UserService
+	cookies *CookieManager
 }
 
-func NewUserHandler(svc *service.UserService) *UserHandler {
-	return &UserHandler{svc: svc}
+func NewUserHandler(svc *service.UserService, cfg *config.Config, log *slog.Logger) *UserHandler {
+	return &UserHandler{base: base{log: log}, svc: svc, cookies: NewCookieManager(cfg)}
 }
 
 // requireSelf: пока в сервисе нет ролей, доступ к /users/{id} разрешён
@@ -24,9 +26,9 @@ func NewUserHandler(svc *service.UserService) *UserHandler {
 // задача будущего /admin API.
 func requireSelf(w http.ResponseWriter, r *http.Request) (user.UserID, bool) {
 	id := chi.URLParam(r, "id")
-	authID, ok := r.Context().Value(middleware.ContextKeyUserID).(string)
+	authID, ok := middleware.UserIDFrom(r.Context())
 	if !ok || authID != id {
-		httputil.WriteJSON(w, http.StatusForbidden, httputil.ErrorResponse{Code: "forbidden", Message: "access denied"})
+		writeError(w, apiError{http.StatusForbidden, "forbidden", "доступ запрещён"})
 		return "", false
 	}
 	return id, true
@@ -39,16 +41,12 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	u, err := h.svc.GetByID(r.Context(), id)
-	if errors.Is(err, user.ErrNotFound) {
-		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
-		return
-	}
 	if err != nil {
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
+		h.fail(w, r, "get_user", err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, httputil.Response{Data: user.UserPreview{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}})
+	writeData(w, http.StatusOK, user.NewUserPreview(u))
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -57,15 +55,12 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.svc.DeleteUser(r.Context(), id)
-	if errors.Is(err, user.ErrNotFound) {
-		httputil.WriteJSON(w, http.StatusNotFound, httputil.ErrorResponse{Code: "not_found", Message: "user not found"})
-		return
-	}
-	if err != nil {
-		httputil.WriteJSON(w, http.StatusInternalServerError, httputil.ErrorResponse{Code: "internal_error", Message: "internal server error"})
+	if err := h.svc.DeleteUser(r.Context(), id); err != nil {
+		h.fail(w, r, "delete_user", err)
 		return
 	}
 
+	// Сессию удалённого аккаунта гасим и на клиенте.
+	h.cookies.ClearSessionCookies(w)
 	w.WriteHeader(http.StatusNoContent)
 }

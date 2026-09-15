@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>{{ .Heading }}</title></head>
+<body style="margin:0;padding:24px 12px;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#1f2430;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+    <tr><td align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:480px;background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#6b7280;padding-bottom:20px;">{{ .AppName }}</td></tr>
+        <tr><td style="font-size:20px;font-weight:600;padding-bottom:12px;">{{ .Heading }}</td></tr>
+        <tr><td style="font-size:15px;line-height:1.55;color:#4b5563;padding-bottom:24px;">{{ .Lead }}</td></tr>
+        <tr><td align="center" style="padding-bottom:24px;">
+          <div style="display:inline-block;font-size:32px;font-weight:700;letter-spacing:.32em;padding:16px 20px 16px 28px;background:#f4f5f7;border-radius:10px;font-family:'SFMono-Regular',Consolas,monospace;">{{ .Code }}</div>
+        </td></tr>
+        <tr><td style="font-size:14px;line-height:1.55;color:#4b5563;padding-bottom:20px;">Код действует {{ .Minutes }}&nbsp;мин.</td></tr>
+        <tr><td style="font-size:13px;line-height:1.55;color:#9097a3;border-top:1px solid #e6e8ec;padding-top:20px;">{{ .Hint }}</td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>

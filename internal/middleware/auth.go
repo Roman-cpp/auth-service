@@ -5,36 +5,65 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/krypton/auth-service/internal/service"
+	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/pkg/httputil"
 )
 
 type contextKey string
 
 const (
-	ContextKeyUserID contextKey = "user_id"
-	ContextKeyEmail  contextKey = "email"
+	contextKeyUserID contextKey = "user_id"
+	contextKeyEmail  contextKey = "email"
 )
 
-func JWTAuth(svc *service.AuthService) func(http.Handler) http.Handler {
+// TokenValidator — ровно то, что middleware нужно от сервиса. Зависимость
+// на интерфейс, а не на *service.AuthService: так middleware тестируется
+// без базы и не тянет за собой половину приложения.
+type TokenValidator interface {
+	ValidateAccessToken(token string) (*user.Claims, error)
+}
+
+func JWTAuth(v TokenValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractToken(r)
 			if token == "" {
-				http.Error(w, `{"error":"authorization header required"}`, http.StatusUnauthorized)
+				unauthorized(w, "требуется авторизация")
 				return
 			}
 
-			claims, err := svc.ValidateAccessToken(token)
+			// ValidateAccessToken отвергает MFA-токен первого шага:
+			// он подписан тем же ключом, но имеет другой тип.
+			claims, err := v.ValidateAccessToken(token)
 			if err != nil {
-				http.Error(w, `{"error":"invalid or expired access token"}`, http.StatusUnauthorized)
+				unauthorized(w, "сессия недействительна или истекла")
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ContextKeyUserID, claims.UserID)
-			ctx = context.WithValue(ctx, ContextKeyEmail, claims.Email)
+			ctx := context.WithValue(r.Context(), contextKeyUserID, claims.UserID)
+			ctx = context.WithValue(ctx, contextKeyEmail, claims.Email)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// UserIDFrom и EmailFrom — единственный способ достать личность из контекста.
+// Ключи не экспортируются, поэтому подложить их снаружи нельзя.
+func UserIDFrom(ctx context.Context) (user.UserID, bool) {
+	id, ok := ctx.Value(contextKeyUserID).(user.UserID)
+	return id, ok
+}
+
+func EmailFrom(ctx context.Context) (string, bool) {
+	email, ok := ctx.Value(contextKeyEmail).(string)
+	return email, ok
+}
+
+func unauthorized(w http.ResponseWriter, message string) {
+	httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{
+		Code:    "unauthorized",
+		Message: message,
+	})
 }
 
 func extractToken(r *http.Request) string {
