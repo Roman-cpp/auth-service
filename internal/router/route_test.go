@@ -30,7 +30,9 @@ func TestRouteTable(t *testing.T) {
 		"POST /api/v1/auth/password/forgot",
 		"POST /api/v1/auth/password/reset",
 		"POST /api/v1/auth/password/change",
+		"POST /api/v1/auth/account/restore",
 		"GET /api/v1/auth/me",
+		"DELETE /api/v1/users/{id}",
 	}
 	for _, route := range want {
 		if !registered[route] {

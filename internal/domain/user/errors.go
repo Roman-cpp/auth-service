@@ -6,7 +6,6 @@ import "errors"
 var (
 	ErrNotFound   = errors.New("user not found")
 	ErrEmailTaken = errors.New("email already taken")
-	ErrDeleted    = errors.New("user already deleted")
 )
 
 // Ошибки сценариев аутентификации. Живут в домене, а не в service: на них
@@ -21,6 +20,15 @@ var (
 	// а не тихий успех: пользователь, меняющий пароль после утечки, должен
 	// узнать, что ничего не изменилось.
 	ErrPasswordUnchanged = errors.New("new password matches the current one")
+)
+
+// Ошибки удалённого аккаунта. Отдаются только тому, кто предъявил верный
+// пароль: до этого удалённый аккаунт неотличим от несуществующего, иначе
+// эндпоинт входа сообщал бы, что адрес когда-то был зарегистрирован.
+var (
+	ErrAccountDeleted    = errors.New("account is deleted")
+	ErrRestoreExpired    = errors.New("account restore window has expired")
+	ErrAccountNotDeleted = errors.New("account is not deleted")
 )
 
 // Ошибки одноразовых кодов.

@@ -196,6 +196,24 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
 }
 
+// RestoreAccount возвращает удалённый аккаунт владельцу. Сессию не открывает:
+// после восстановления нужно войти обычным путём, со вторым фактором, если
+// он включён.
+func (h *AuthHandler) RestoreAccount(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.RestoreAccount](w, r)
+	if !ok {
+		return
+	}
+
+	u, err := h.svc.RestoreAccount(r.Context(), req.Email, req.Password)
+	if err != nil {
+		h.fail(w, r, "restore_account", err)
+		return
+	}
+
+	writeData(w, http.StatusOK, map[string]any{"user": u})
+}
+
 // ---- пароль ----
 
 // ForgotPassword отвечает одинаково для известного и неизвестного адреса —

@@ -60,8 +60,8 @@ func run() error {
 	mail := mailer.New(mailer.NewSender(cfg.SMTP, log), cfg.SMTP.FromName)
 	tokens := service.NewTokenIssuer(repo, cfg.JWT)
 	codes := service.NewCodeService(repo, mail, cfg.Codes)
-	authSvc := service.NewAuthService(repo, tokens, codes)
-	userSvc := service.NewUserService(repo)
+	authSvc := service.NewAuthService(repo, tokens, codes, cfg.Account)
+	userSvc := service.NewUserService(repo, cfg.Account)
 
 	handlers := router.NewRouter(
 		handler.NewAuthHandler(authSvc, cfg, log),
@@ -69,7 +69,7 @@ func run() error {
 		middleware.JWTAuth(authSvc),
 	)
 
-	go runCleanup(ctx, repo, log)
+	go runCleanup(ctx, repo, cfg.Account, log)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Service.Port,
@@ -121,9 +121,10 @@ func newLogger(cfg config.ServiceConfig) *slog.Logger {
 	return slog.New(h).With(slog.String("service", cfg.Name))
 }
 
-// runCleanup убирает протухшие refresh-токены и одноразовые коды. Обе
-// таблицы растут при каждом входе, и без уборки чистятся только вручную.
-func runCleanup(ctx context.Context, repo *repository.UserRepository, log *slog.Logger) {
+// runCleanup убирает протухшие refresh-токены и одноразовые коды, а также
+// аккаунты, у которых кончилось окно восстановления. Первые две таблицы
+// растут при каждом входе, и без уборки чистятся только вручную.
+func runCleanup(ctx context.Context, repo *repository.UserRepository, account config.AccountConfig, log *slog.Logger) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
@@ -137,6 +138,17 @@ func runCleanup(ctx context.Context, repo *repository.UserRepository, log *slog.
 			}
 			if err := repo.DeleteExpiredAuthCodes(ctx); err != nil {
 				log.Error("cleanup auth codes", slog.Any("error", err))
+			}
+
+			// Удаление аккаунта логическое: строка живёт, пока её можно
+			// вернуть. Здесь она уходит окончательно, унося каскадом коды
+			// и refresh-токены.
+			purged, err := repo.PurgeDeletedUsers(ctx, time.Now().Add(-account.RestoreWindow))
+			if err != nil {
+				log.Error("purge deleted users", slog.Any("error", err))
+			}
+			if purged > 0 {
+				log.Info("purged deleted accounts", slog.Int64("count", purged))
 			}
 		}
 	}

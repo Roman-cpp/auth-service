@@ -59,6 +59,13 @@ type ChangePassword struct {
 	NewPassword     string `json:"new_password"     validate:"required,min=8,max=72"`
 }
 
+// RestoreAccount — возврат удалённого аккаунта. Сессии у владельца нет,
+// удаление её погасило, поэтому опознание идёт по email и паролю.
+type RestoreAccount struct {
+	Email    string `json:"email"    validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
 type CreateDTO struct {
 	LastName     string
 	FirstName    string

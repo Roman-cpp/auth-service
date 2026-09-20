@@ -55,12 +55,15 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.DeleteUser(r.Context(), id); err != nil {
+	restoreUntil, err := h.svc.DeleteUser(r.Context(), id)
+	if err != nil {
 		h.fail(w, r, "delete_user", err)
 		return
 	}
 
 	// Сессию удалённого аккаунта гасим и на клиенте.
 	h.cookies.ClearSessionCookies(w)
-	w.WriteHeader(http.StatusNoContent)
+	// Не 204: срок, до которого аккаунт можно вернуть, клиенту нужно
+	// показать сразу — другого места узнать его у пользователя нет.
+	writeData(w, http.StatusOK, map[string]any{"restore_available_until": restoreUntil})
 }

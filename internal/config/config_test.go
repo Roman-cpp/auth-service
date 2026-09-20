@@ -18,6 +18,7 @@ func validConfig() *Config {
 			ResendCooldown: time.Minute,
 			MaxAttempts:    5,
 		},
+		Account: AccountConfig{RestoreWindow: 365 * 24 * time.Hour},
 	}
 }
 
@@ -63,6 +64,17 @@ func TestValidateRejectsMFATokenShorterThanCode(t *testing.T) {
 
 	if err := cfg.validate(); err == nil {
 		t.Fatal("MFA token TTL shorter than the code TTL accepted")
+	}
+}
+
+// Нулевое окно восстановления означало бы, что удалённый аккаунт
+// невосстановим с первой же секунды, — так включать это можно только явно.
+func TestValidateRejectsNonPositiveRestoreWindow(t *testing.T) {
+	cfg := validConfig()
+	cfg.Account.RestoreWindow = 0
+
+	if err := cfg.validate(); err == nil {
+		t.Fatal("zero ACCOUNT_RESTORE_WINDOW accepted")
 	}
 }
 
