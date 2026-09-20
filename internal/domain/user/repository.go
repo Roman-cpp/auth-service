@@ -15,6 +15,7 @@ type Repository interface {
 	SoftDelete(ctx context.Context, id UserID) error
 	MarkEmailVerified(ctx context.Context, id UserID) error
 	SetTwoFactorEnabled(ctx context.Context, id UserID, enabled bool) error
+	UpdatePassword(ctx context.Context, id UserID, passwordHash string) error
 
 	// IssueAuthCode гасит предыдущий живой код той же пары
 	// (пользователь, назначение) и записывает новый.

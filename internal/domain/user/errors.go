@@ -17,6 +17,10 @@ var (
 	ErrInvalidToken       = errors.New("invalid or expired token")
 	ErrEmailNotVerified   = errors.New("email is not verified")
 	ErrEmailVerified      = errors.New("email is already verified")
+	// ErrPasswordUnchanged: новый пароль совпал с текущим. Отдельная ошибка,
+	// а не тихий успех: пользователь, меняющий пароль после утечки, должен
+	// узнать, что ничего не изменилось.
+	ErrPasswordUnchanged = errors.New("new password matches the current one")
 )
 
 // Ошибки одноразовых кодов.

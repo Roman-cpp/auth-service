@@ -83,9 +83,10 @@ type Claims struct {
 type CodePurpose string
 
 const (
-	CodePurposeEmailVerify CodePurpose = "email_verify"
-	CodePurposeMFALogin    CodePurpose = "mfa_login"
-	CodePurposeMFAEnable   CodePurpose = "mfa_enable"
+	CodePurposeEmailVerify   CodePurpose = "email_verify"
+	CodePurposeMFALogin      CodePurpose = "mfa_login"
+	CodePurposeMFAEnable     CodePurpose = "mfa_enable"
+	CodePurposePasswordReset CodePurpose = "password_reset"
 )
 
 type AuthCode struct {

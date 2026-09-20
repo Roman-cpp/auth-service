@@ -95,6 +95,15 @@ func (r *UserRepository) MarkEmailVerified(ctx context.Context, id user.UserID) 
 		  WHERE id = $1 AND deleted_at IS NULL AND email_verified_at IS NULL`, id)
 }
 
+// UpdatePassword не проверяет email_verified_at: сброс пароля доступен
+// только подтверждённому аккаунту, но решается это в сервисе — здесь важно
+// лишь не воскресить удалённого пользователя.
+func (r *UserRepository) UpdatePassword(ctx context.Context, id user.UserID, passwordHash string) error {
+	return r.execExpectingRow(ctx,
+		`UPDATE users SET password_hash = $2, updated_at = NOW()
+		  WHERE id = $1 AND deleted_at IS NULL`, id, passwordHash)
+}
+
 func (r *UserRepository) SetTwoFactorEnabled(ctx context.Context, id user.UserID, enabled bool) error {
 	return r.execExpectingRow(ctx,
 		`UPDATE users SET two_factor_enabled = $2, updated_at = NOW()

@@ -119,6 +119,19 @@ func (f *fakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
 	return nil
 }
 
+func (f *fakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	u, ok := f.users[id]
+	if !ok || u.DeletedAt != nil {
+		return user.ErrNotFound
+	}
+	u.PasswordHash = passwordHash
+	u.UpdatedAt = f.now()
+	return nil
+}
+
 func (f *fakeRepo) SetTwoFactorEnabled(_ context.Context, id user.UserID, enabled bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

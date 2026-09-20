@@ -57,6 +57,15 @@ func NewRouter(authH *handler.AuthHandler, userH *handler.UserHandler, authMw fu
 				r.With(resendLimiter).Post("/resend", authH.ResendMFA)
 			})
 
+			// Все три маршрута про пароль держатся вместе, хотя защищены
+			// по-разному: forgot/reset доступны как раз тому, кто войти не
+			// может, а change — только изнутри сессии.
+			r.Route("/password", func(r chi.Router) {
+				r.With(resendLimiter).Post("/forgot", authH.ForgotPassword)
+				r.With(verifyLimiter).Post("/reset", authH.ResetPassword)
+				r.With(authMw, loginLimiter).Post("/change", authH.ChangePassword)
+			})
+
 			r.Group(func(r chi.Router) {
 				r.Use(authMw)
 				r.Post("/logout", authH.Logout)
