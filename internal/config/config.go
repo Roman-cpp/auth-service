@@ -16,6 +16,7 @@ type Config struct {
 	JWT      JWTConfig
 	SMTP     SMTPConfig
 	Codes    CodesConfig
+	Account  AccountConfig
 }
 
 type ServiceConfig struct {
@@ -84,6 +85,15 @@ type CodesConfig struct {
 	MaxAttempts    int
 }
 
+type AccountConfig struct {
+	// RestoreWindow — сколько удалённый аккаунт можно восстановить. По его
+	// истечении строка удаляется физически, и адрес освобождается совсем.
+	// Значение читается и при восстановлении, и уборщиком, поэтому менять
+	// его на живом сервисе безопасно только в сторону увеличения:
+	// сокращение немедленно делает часть аккаунтов невосстановимыми.
+	RestoreWindow time.Duration
+}
+
 func Load() (*Config, error) {
 	// .env не обязателен (можно задавать переменные окружения напрямую)
 	_ = godotenv.Load()
@@ -121,6 +131,9 @@ func Load() (*Config, error) {
 			ResendCooldown: parseDuration("AUTH_CODE_RESEND_COOLDOWN", time.Minute),
 			MaxAttempts:    parseInt("AUTH_CODE_MAX_ATTEMPTS", 5),
 		},
+		Account: AccountConfig{
+			RestoreWindow: parseDuration("ACCOUNT_RESTORE_WINDOW", 365*24*time.Hour),
+		},
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -152,6 +165,12 @@ func (c *Config) validate() error {
 	if c.JWT.MFATokenTTL < c.Codes.TTL {
 		return fmt.Errorf("JWT_MFA_TTL (%s) must be at least AUTH_CODE_TTL (%s)",
 			c.JWT.MFATokenTTL, c.Codes.TTL)
+	}
+	// Ноль означал бы «удалять физически сразу», а это делает уборщик по
+	// таймеру: до его прохода аккаунт висел бы удалённым и невосстановимым.
+	// Такой режим нужно вводить осознанно, а не опечаткой в переменной.
+	if c.Account.RestoreWindow <= 0 {
+		return fmt.Errorf("ACCOUNT_RESTORE_WINDOW must be positive, got %s", c.Account.RestoreWindow)
 	}
 	return nil
 }

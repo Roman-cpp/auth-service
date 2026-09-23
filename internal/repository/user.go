@@ -15,7 +15,7 @@ import (
 // дублировали список руками, и каждое новое поле приходилось дописывать
 // в три места.
 const userColumns = `id, email, password_hash, last_name, first_name, patronymic,
-	email_verified_at, two_factor_enabled, created_at, updated_at`
+	email_verified_at, two_factor_enabled, deleted_at, created_at, updated_at`
 
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -33,7 +33,7 @@ func scanUser(row rowScanner) (*user.User, error) {
 	u := &user.User{}
 	err := row.Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.LastName, &u.FirstName, &u.Patronymic,
-		&u.EmailVerifiedAt, &u.TwoFactorEnabled, &u.CreatedAt, &u.UpdatedAt,
+		&u.EmailVerifiedAt, &u.TwoFactorEnabled, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
@@ -49,11 +49,16 @@ func scanUser(row rowScanner) (*user.User, error) {
 // начав регистрацию и не подтвердив её. Подтверждённый аккаунт защищён
 // условием в DO UPDATE: конфликт по нему не даёт ни одной строки, что и
 // означает ErrEmailTaken.
+//
+// Арбитром конфликта служит частичный индекс idx_users_email_active, поэтому
+// ON CONFLICT повторяет его предикат. Удалённые строки в него не входят —
+// на освобождённый адрес регистрация просто заводит новый аккаунт, а старый
+// остаётся восстановимым, пока его не займёт новый владелец.
 func (r *UserRepository) Upsert(ctx context.Context, dto user.CreateDTO) (*user.User, error) {
 	u, err := scanUser(r.pool.QueryRow(ctx,
 		`INSERT INTO users (last_name, first_name, patronymic, email, password_hash)
 		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (email) DO UPDATE
+		 ON CONFLICT (email) WHERE deleted_at IS NULL DO UPDATE
 		    SET last_name     = EXCLUDED.last_name,
 		        first_name    = EXCLUDED.first_name,
 		        patronymic    = EXCLUDED.patronymic,
@@ -83,16 +88,96 @@ func (r *UserRepository) GetByID(ctx context.Context, id user.UserID) (*user.Use
 	))
 }
 
-func (r *UserRepository) SoftDelete(ctx context.Context, id user.UserID) error {
-	return r.execExpectingRow(ctx,
+func (r *UserRepository) GetDeletedByEmail(ctx context.Context, email string) (*user.User, error) {
+	return scanUser(r.pool.QueryRow(ctx,
+		`SELECT `+userColumns+` FROM users
+		  WHERE email = $1 AND deleted_at IS NOT NULL
+		  ORDER BY deleted_at DESC
+		  LIMIT 1`,
+		email,
+	))
+}
+
+// SoftDelete отдаёт deleted_at обратно: окно восстановления отсчитывается от
+// момента, зафиксированного базой, а не от времени на стороне приложения.
+func (r *UserRepository) SoftDelete(ctx context.Context, id user.UserID) (time.Time, error) {
+	var deletedAt time.Time
+	err := r.pool.QueryRow(ctx,
 		`UPDATE users SET deleted_at = NOW(), updated_at = NOW()
-		  WHERE id = $1 AND deleted_at IS NULL`, id)
+		  WHERE id = $1 AND deleted_at IS NULL
+		  RETURNING deleted_at`, id,
+	).Scan(&deletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, user.ErrNotFound
+	}
+	return deletedAt, err
+}
+
+// Restore возвращает аккаунт в строй. Занятость адреса не проверяется
+// отдельным SELECT: между проверкой и UPDATE адрес успел бы занять кто-то
+// ещё, поэтому решает уникальный индекс — конфликт с живым аккаунтом
+// приходит как ErrEmailTaken.
+//
+// Незавершённая чужая регистрация на этот адрес при этом сносится: она не
+// доказывает ничего (почта не подтверждена), а восстанавливающий предъявил
+// пароль. Это то же правило, по которому Upsert перезаписывает
+// неподтверждённую заявку, — иначе восстановление блокируется навсегда любым,
+// кто начал регистрацию на чужой адрес.
+func (r *UserRepository) Restore(ctx context.Context, id user.UserID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM users living
+		  USING users deleted
+		  WHERE deleted.id = $1
+		    AND living.email = deleted.email
+		    AND living.deleted_at IS NULL
+		    AND living.email_verified_at IS NULL`, id,
+	); err != nil {
+		return err
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE users SET deleted_at = NULL, updated_at = NOW()
+		  WHERE id = $1 AND deleted_at IS NOT NULL`, id)
+	if isPgUniqueViolation(err) {
+		return user.ErrEmailTaken
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return user.ErrNotFound
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *UserRepository) PurgeDeletedUsers(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE deleted_at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *UserRepository) MarkEmailVerified(ctx context.Context, id user.UserID) error {
 	return r.execExpectingRow(ctx,
 		`UPDATE users SET email_verified_at = NOW(), updated_at = NOW()
 		  WHERE id = $1 AND deleted_at IS NULL AND email_verified_at IS NULL`, id)
+}
+
+// UpdatePassword не проверяет email_verified_at: сброс пароля доступен
+// только подтверждённому аккаунту, но решается это в сервисе — здесь важно
+// лишь не воскресить удалённого пользователя.
+func (r *UserRepository) UpdatePassword(ctx context.Context, id user.UserID, passwordHash string) error {
+	return r.execExpectingRow(ctx,
+		`UPDATE users SET password_hash = $2, updated_at = NOW()
+		  WHERE id = $1 AND deleted_at IS NULL`, id, passwordHash)
 }
 
 func (r *UserRepository) SetTwoFactorEnabled(ctx context.Context, id user.UserID, enabled bool) error {

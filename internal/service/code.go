@@ -99,6 +99,15 @@ func (s *CodeService) Issue(
 // успехе: неверная попытка лишь увеличивает счётчик, иначе любой желающий
 // мог бы сжечь чужой код одним неправильным вводом.
 func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose user.CodePurpose, code string) error {
+	return s.VerifyThen(ctx, userID, purpose, code, nil)
+}
+
+// VerifyThen — Verify с проверкой между сверкой кода и его погашением.
+// Нужна там, где запрос может быть отклонён уже после верного кода по
+// причине, которую пользователь исправит сам (новый пароль совпал со
+// старым): без неё код сгорал бы, и за исправлением пришлось бы идти
+// с новым письмом. Если check вернул ошибку, код остаётся живым.
+func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpose user.CodePurpose, code string, check func() error) error {
 	stored, err := s.repo.LatestAuthCode(ctx, userID, purpose)
 	if errors.Is(err, user.ErrNotFound) {
 		return user.ErrCodeInvalid
@@ -129,6 +138,12 @@ func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose us
 
 	if err := bcrypt.CompareHashAndPassword([]byte(stored.CodeHash), []byte(code)); err != nil {
 		return user.ErrCodeInvalid
+	}
+
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 
 	// Гасим в БД условием consumed_at IS NULL: две параллельные проверки

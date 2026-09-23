@@ -93,17 +93,92 @@ func (f *fakeRepo) GetByEmail(_ context.Context, email string) (*user.User, erro
 	return nil, user.ErrNotFound
 }
 
-func (f *fakeRepo) SoftDelete(_ context.Context, id user.UserID) error {
+// GetDeletedByEmail повторяет ORDER BY deleted_at DESC: удалённых строк на
+// один адрес может быть несколько.
+func (f *fakeRepo) GetDeletedByEmail(_ context.Context, email string) (*user.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var latest *user.User
+	for _, u := range f.users {
+		if u.Email != email || u.DeletedAt == nil {
+			continue
+		}
+		if latest == nil || u.DeletedAt.After(*latest.DeletedAt) {
+			latest = u
+		}
+	}
+	if latest == nil {
+		return nil, user.ErrNotFound
+	}
+	return cloneUser(latest), nil
+}
+
+func (f *fakeRepo) SoftDelete(_ context.Context, id user.UserID) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	u, ok := f.users[id]
 	if !ok || u.DeletedAt != nil {
-		return user.ErrNotFound
+		return time.Time{}, user.ErrNotFound
 	}
 	deleted := f.now()
 	u.DeletedAt = &deleted
+	return deleted, nil
+}
+
+// Restore воспроизводит и частичный уникальный индекс (живой аккаунт с этим
+// адресом блокирует возврат), и снос неподтверждённой чужой заявки.
+func (f *fakeRepo) Restore(_ context.Context, id user.UserID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	u, ok := f.users[id]
+	if !ok || u.DeletedAt == nil {
+		return user.ErrNotFound
+	}
+
+	for otherID, other := range f.users {
+		if otherID == id || other.Email != u.Email || other.DeletedAt != nil {
+			continue
+		}
+		if other.EmailVerified() {
+			return user.ErrEmailTaken
+		}
+		delete(f.users, otherID)
+	}
+
+	u.DeletedAt = nil
+	u.UpdatedAt = f.now()
 	return nil
+}
+
+// PurgeDeletedUsers физически удаляет строку, а вместе с ней — коды и
+// refresh-токены: в схеме это ON DELETE CASCADE.
+func (f *fakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var purged int64
+	for id, u := range f.users {
+		if u.DeletedAt == nil || !u.DeletedAt.Before(before) {
+			continue
+		}
+		delete(f.users, id)
+		purged++
+
+		for codeID, c := range f.codes {
+			if c.UserID == id {
+				delete(f.codes, codeID)
+			}
+		}
+		for hash, rt := range f.refresh {
+			if rt.UserID == id {
+				delete(f.refresh, hash)
+			}
+		}
+	}
+	return purged, nil
 }
 
 func (f *fakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
@@ -116,6 +191,19 @@ func (f *fakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
 	}
 	verified := f.now()
 	u.EmailVerifiedAt = &verified
+	return nil
+}
+
+func (f *fakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	u, ok := f.users[id]
+	if !ok || u.DeletedAt != nil {
+		return user.ErrNotFound
+	}
+	u.PasswordHash = passwordHash
+	u.UpdatedAt = f.now()
 	return nil
 }
 

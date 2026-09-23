@@ -56,7 +56,11 @@ var errorCatalog = []struct {
 	{user.ErrCodeAttempts, apiError{http.StatusTooManyRequests, "too_many_attempts", "слишком много неверных попыток, запросите новый код"}},
 	{user.ErrCodeInvalid, apiError{http.StatusBadRequest, "invalid_code", "неверный код подтверждения"}},
 	{user.ErrInvalidToken, apiError{http.StatusUnauthorized, "invalid_token", "сессия недействительна или истекла"}},
+	{user.ErrPasswordUnchanged, apiError{http.StatusBadRequest, "password_unchanged", "новый пароль совпадает с текущим"}},
 	{user.ErrTwoFactorState, apiError{http.StatusConflict, "two_factor_state", "двухфакторная аутентификация уже в этом состоянии"}},
+	{user.ErrAccountDeleted, apiError{http.StatusForbidden, "account_deleted", "аккаунт удалён — его ещё можно восстановить"}},
+	{user.ErrRestoreExpired, apiError{http.StatusGone, "restore_expired", "срок восстановления аккаунта истёк"}},
+	{user.ErrAccountNotDeleted, apiError{http.StatusConflict, "account_not_deleted", "аккаунт не удалён, восстанавливать нечего"}},
 	{service.ErrMailDelivery, apiError{http.StatusBadGateway, "mail_delivery_failed", "не удалось отправить письмо, попробуйте позже"}},
 	{user.ErrNotFound, apiError{http.StatusNotFound, "not_found", "не найдено"}},
 }

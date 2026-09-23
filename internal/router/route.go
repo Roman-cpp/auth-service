@@ -50,11 +50,25 @@ func NewRouter(authH *handler.AuthHandler, userH *handler.UserHandler, authMw fu
 			r.With(loginLimiter).Post("/login", authH.Login)
 			r.With(refreshLimiter).Post("/refresh", authH.Refresh)
 
+			// Восстановление удалённого аккаунта: сессии у владельца нет,
+			// опознание по email и паролю — значит, поверхность для перебора
+			// та же, что у входа, и лимит тот же.
+			r.With(loginLimiter).Post("/account/restore", authH.RestoreAccount)
+
 			// Второй шаг входа. Личность берётся из mfa_token-куки,
 			// поэтому authMw здесь неприменим — access-токена ещё нет.
 			r.Route("/mfa", func(r chi.Router) {
 				r.With(verifyLimiter).Post("/verify", authH.VerifyMFA)
 				r.With(resendLimiter).Post("/resend", authH.ResendMFA)
+			})
+
+			// Все три маршрута про пароль держатся вместе, хотя защищены
+			// по-разному: forgot/reset доступны как раз тому, кто войти не
+			// может, а change — только изнутри сессии.
+			r.Route("/password", func(r chi.Router) {
+				r.With(resendLimiter).Post("/forgot", authH.ForgotPassword)
+				r.With(verifyLimiter).Post("/reset", authH.ResetPassword)
+				r.With(authMw, loginLimiter).Post("/change", authH.ChangePassword)
 			})
 
 			r.Group(func(r chi.Router) {

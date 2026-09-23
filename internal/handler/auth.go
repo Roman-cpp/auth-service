@@ -196,6 +196,85 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
 }
 
+// RestoreAccount возвращает удалённый аккаунт владельцу. Сессию не открывает:
+// после восстановления нужно войти обычным путём, со вторым фактором, если
+// он включён.
+func (h *AuthHandler) RestoreAccount(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.RestoreAccount](w, r)
+	if !ok {
+		return
+	}
+
+	u, err := h.svc.RestoreAccount(r.Context(), req.Email, req.Password)
+	if err != nil {
+		h.fail(w, r, "restore_account", err)
+		return
+	}
+
+	writeData(w, http.StatusOK, map[string]any{"user": u})
+}
+
+// ---- пароль ----
+
+// ForgotPassword отвечает одинаково для известного и неизвестного адреса —
+// как и ResendCode, иначе эндпоинт превращается в проверку «есть ли аккаунт».
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.ForgotPassword](w, r)
+	if !ok {
+		return
+	}
+
+	challenge, err := h.svc.StartPasswordReset(r.Context(), req.Email)
+	if err != nil {
+		h.fail(w, r, "forgot_password", err)
+		return
+	}
+
+	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+}
+
+// ResetPassword намеренно не открывает сессию: после смены пароля нужно
+// войти заново — в том числе со вторым фактором, если он включён.
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.ResetPassword](w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.svc.ResetPassword(r.Context(), req); err != nil {
+		h.fail(w, r, "reset_password", err)
+		return
+	}
+
+	// Refresh-токены отозваны все до одного, так что куки на этом клиенте
+	// (если он всё же был залогинен) уже ничего не стоят.
+	h.cookies.ClearSessionCookies(w)
+	writeData(w, http.StatusOK, map[string]string{"message": "password changed"})
+}
+
+// ChangePassword выдаёт новую пару токенов: старая отозвана вместе со всеми
+// остальными сессиями, и без замены текущий клиент разлогинился бы сам.
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFrom(r.Context())
+	if !ok {
+		h.fail(w, r, "change_password", user.ErrInvalidToken)
+		return
+	}
+	req, ok := decodeJSON[user.ChangePassword](w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.ChangePassword(r.Context(), userID, req)
+	if err != nil {
+		h.fail(w, r, "change_password", err)
+		return
+	}
+
+	h.cookies.SetSessionCookies(w, result.Tokens)
+	writeData(w, http.StatusOK, map[string]any{"user": result.User})
+}
+
 // ---- управление вторым фактором ----
 
 func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {

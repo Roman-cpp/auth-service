@@ -62,12 +62,14 @@ func (s *captureSender) last(t *testing.T) sentMail {
 }
 
 type harness struct {
-	repo   *fakeRepo
-	mails  *captureSender
-	tokens *TokenIssuer
-	codes  *CodeService
-	auth   *AuthService
-	jwtCfg config.JWTConfig
+	repo    *fakeRepo
+	mails   *captureSender
+	tokens  *TokenIssuer
+	codes   *CodeService
+	auth    *AuthService
+	users   *UserService
+	jwtCfg  config.JWTConfig
+	account config.AccountConfig
 }
 
 func newHarness(t *testing.T) *harness {
@@ -87,18 +89,48 @@ func newHarness(t *testing.T) *harness {
 		ResendCooldown: time.Minute,
 		MaxAttempts:    3,
 	}
+	accountCfg := config.AccountConfig{RestoreWindow: 365 * 24 * time.Hour}
 
 	tokens := NewTokenIssuer(repo, jwtCfg)
 	codes := NewCodeService(repo, mailer.New(sender, "Nexus"), codesCfg)
 
 	return &harness{
-		repo:   repo,
-		mails:  sender,
-		tokens: tokens,
-		codes:  codes,
-		auth:   NewAuthService(repo, tokens, codes),
-		jwtCfg: jwtCfg,
+		repo:    repo,
+		mails:   sender,
+		tokens:  tokens,
+		codes:   codes,
+		auth:    NewAuthService(repo, tokens, codes, accountCfg),
+		users:   NewUserService(repo, accountCfg),
+		jwtCfg:  jwtCfg,
+		account: accountCfg,
 	}
+}
+
+// deleteAccount удаляет аккаунт настоящим сценарием сервиса — вместе с
+// отзывом сессий, а не правкой поля в фейковом репозитории.
+func (h *harness) deleteAccount(t *testing.T, id user.UserID) time.Time {
+	t.Helper()
+
+	until, err := h.users.DeleteUser(t.Context(), id)
+	if err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+	return until
+}
+
+// ageDeletion отматывает момент удаления назад, чтобы не ждать окончания
+// окна восстановления в реальном времени.
+func (h *harness) ageDeletion(t *testing.T, id user.UserID, by time.Duration) {
+	t.Helper()
+	h.repo.mu.Lock()
+	defer h.repo.mu.Unlock()
+
+	u, ok := h.repo.users[id]
+	if !ok || u.DeletedAt == nil {
+		t.Fatalf("account %s is not deleted", id)
+	}
+	aged := u.DeletedAt.Add(-by)
+	u.DeletedAt = &aged
 }
 
 const testPassword = "correct-horse-battery"

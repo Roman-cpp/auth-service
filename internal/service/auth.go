@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/mailer"
 	"golang.org/x/crypto/bcrypt"
@@ -29,13 +30,14 @@ var dummyPasswordHash = sync.OnceValue(func() []byte {
 })
 
 type AuthService struct {
-	repo   user.Repository
-	tokens *TokenIssuer
-	codes  *CodeService
+	repo    user.Repository
+	tokens  *TokenIssuer
+	codes   *CodeService
+	account config.AccountConfig
 }
 
-func NewAuthService(repo user.Repository, tokens *TokenIssuer, codes *CodeService) *AuthService {
-	return &AuthService{repo: repo, tokens: tokens, codes: codes}
+func NewAuthService(repo user.Repository, tokens *TokenIssuer, codes *CodeService, account config.AccountConfig) *AuthService {
+	return &AuthService{repo: repo, tokens: tokens, codes: codes, account: account}
 }
 
 // ---- регистрация и подтверждение почты ----
@@ -44,7 +46,7 @@ func NewAuthService(repo user.Repository, tokens *TokenIssuer, codes *CodeServic
 // Сессия здесь не выдаётся: до подтверждения адреса аккаунтом пользоваться
 // нельзя.
 func (s *AuthService) Register(ctx context.Context, req *user.Register) (*user.RegisterResult, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), passwordBcryptCost)
+	hash, err := hashPassword(req.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +56,7 @@ func (s *AuthService) Register(ctx context.Context, req *user.Register) (*user.R
 		FirstName:    req.FirstName,
 		Patronymic:   req.Patronymic,
 		Email:        normalizeEmail(req.Email),
-		PasswordHash: string(hash),
+		PasswordHash: hash,
 	})
 	if err != nil {
 		return nil, err
@@ -120,9 +122,10 @@ func (s *AuthService) VerifyEmail(ctx context.Context, req *user.VerifyCode) (*u
 func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.LoginResult, error) {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
 	if errors.Is(err, user.ErrNotFound) {
-		// Хеш всё равно считаем — ради одинакового времени ответа.
-		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
-		return nil, user.ErrInvalidCredentials
+		// Живого аккаунта нет — но, возможно, есть удалённый и ещё
+		// восстановимый. Про него владельцу лучше сказать прямо, иначе про
+		// возможность восстановления он не узнает никогда.
+		return nil, s.loginOnMissingAccount(ctx, req.Email, req.Password)
 	}
 	if err != nil {
 		return nil, err
@@ -238,6 +241,200 @@ func (s *AuthService) DisableTwoFactor(ctx context.Context, id user.UserID, pass
 	return user.NewUserPreview(u), nil
 }
 
+// ---- удаление и восстановление аккаунта ----
+
+// RestoreAccount возвращает удалённый аккаунт владельцу по email и паролю.
+//
+// Второй фактор здесь не спрашивается, и это ничего не ослабляет: сессию
+// восстановление не выдаёт, а войти потом нужно обычным путём — со вторым
+// фактором, если он был включён. Права, которых не давал бы обычный вход,
+// операция не открывает.
+func (s *AuthService) RestoreAccount(ctx context.Context, email, password string) (*user.UserPreview, error) {
+	u, err := s.repo.GetDeletedByEmail(ctx, normalizeEmail(email))
+	if errors.Is(err, user.ErrNotFound) {
+		// Удалённого аккаунта нет. Возможно, он жив — владельцу честнее
+		// сказать, что восстанавливать нечего, чем «неверный пароль».
+		return nil, s.restoreOnMissingAccount(ctx, email, password)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		return nil, user.ErrInvalidCredentials
+	}
+	// Срок проверяется после пароля — иначе ответ про истёкшее окно сообщал
+	// бы кому угодно, что такой адрес когда-то был зарегистрирован.
+	if !s.restorable(u) {
+		return nil, user.ErrRestoreExpired
+	}
+
+	// ErrEmailTaken здесь означает, что адрес успел занять новый
+	// подтверждённый аккаунт: вернуть старый уже некуда.
+	if err := s.repo.Restore(ctx, u.ID); err != nil {
+		return nil, err
+	}
+	u.DeletedAt = nil
+
+	return user.NewUserPreview(u), nil
+}
+
+// restorable: окно отсчитывается от момента удаления. После него аккаунт
+// неотличим от несуществующего, даже если уборщик ещё не дошёл до строки.
+func (s *AuthService) restorable(u *user.User) bool {
+	return u.DeletedAt != nil && time.Since(*u.DeletedAt) < s.account.RestoreWindow
+}
+
+// loginOnMissingAccount разбирает вход по адресу, за которым нет живого
+// аккаунта. Удалённый и ещё восстановимый — единственный случай, когда ответ
+// отличается от «неверный email или пароль», и только для предъявившего
+// верный пароль.
+func (s *AuthService) loginOnMissingAccount(ctx context.Context, email, password string) error {
+	u, err := s.repo.GetDeletedByEmail(ctx, normalizeEmail(email))
+	if errors.Is(err, user.ErrNotFound) {
+		// Хеш всё равно считаем — ради одинакового времени ответа.
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(password))
+		return user.ErrInvalidCredentials
+	}
+	if err != nil {
+		return err
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		return user.ErrInvalidCredentials
+	}
+	if !s.restorable(u) {
+		return user.ErrInvalidCredentials
+	}
+	return user.ErrAccountDeleted
+}
+
+// restoreOnMissingAccount отвечает на попытку восстановить то, что не
+// удалено: живой аккаунт с верным паролем — это ErrAccountNotDeleted, всё
+// остальное неотличимо от неверных учётных данных.
+func (s *AuthService) restoreOnMissingAccount(ctx context.Context, email, password string) error {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(email))
+	if errors.Is(err, user.ErrNotFound) {
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(password))
+		return user.ErrInvalidCredentials
+	}
+	if err != nil {
+		return err
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		return user.ErrInvalidCredentials
+	}
+	return user.ErrAccountNotDeleted
+}
+
+// ---- пароль ----
+
+// StartPasswordReset отправляет код для смены пароля и, как и повторная
+// отправка подтверждения, никогда не сообщает, есть ли такой аккаунт: для
+// неизвестного адреса возвращается такой же ответ, просто без письма.
+//
+// Неподтверждённому аккаунту письмо тоже не уходит. Менять там нечего: такая
+// заявка перезаписывается повторной регистрацией, а разослать письмо о сбросе
+// на чужой, ещё не подтверждённый адрес иначе мог бы кто угодно.
+func (s *AuthService) StartPasswordReset(ctx context.Context, email string) (*user.CodeChallenge, error) {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(email))
+	if errors.Is(err, user.ErrNotFound) {
+		return s.codes.Challenge(time.Now()), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !u.EmailVerified() {
+		return s.codes.Challenge(time.Now()), nil
+	}
+
+	return s.codes.Issue(ctx, u, user.CodePurposePasswordReset, mailer.TemplatePasswordReset)
+}
+
+// ResetPassword меняет пароль по коду из письма.
+//
+// Сессия здесь НЕ открывается, хотя код предъявлен, — в отличие от
+// VerifyEmail. Код сброса приходит на ту же почту, что и код второго фактора:
+// выдай мы сессию, сброс пароля стал бы обходом 2FA для того, кто получил
+// доступ к ящику. После смены пароля нужно войти обычным путём, со всеми
+// факторами.
+func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword) error {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
+	if errors.Is(err, user.ErrNotFound) {
+		// Тот же ответ, что и на неверный код: иначе эндпоинт становится
+		// способом проверять, зарегистрирован ли адрес (см. VerifyEmail).
+		return user.ErrCodeInvalid
+	}
+	if err != nil {
+		return err
+	}
+	// Кода для неподтверждённого аккаунта не выдавалось, но проверка стоит
+	// явно: без неё путь зависел бы от того, что StartPasswordReset промолчал.
+	if !u.EmailVerified() {
+		return user.ErrCodeInvalid
+	}
+
+	// Код проверяется раньше, чем новый пароль сравнивается с текущим.
+	// Иначе порядок обратный: ErrPasswordUnchanged на произвольный пароль
+	// без кода — это оракул, по которому пароль подбирается офлайн.
+	// Сравнение при этом идёт до погашения кода: совпавший пароль — ошибка
+	// пользователя, и исправлять её он должен тем же кодом, а не новым письмом.
+	sameAsCurrent := func() error {
+		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) == nil {
+			return user.ErrPasswordUnchanged
+		}
+		return nil
+	}
+	if err := s.codes.VerifyThen(ctx, u.ID, user.CodePurposePasswordReset, req.Code, sameAsCurrent); err != nil {
+		return err
+	}
+
+	return s.replacePassword(ctx, u, req.Password)
+}
+
+// ChangePassword меняет пароль изнутри сессии. Вместе со всеми остальными
+// сессиями гасится и сессия вызывающего клиента, поэтому взамен он сразу
+// получает новую пару токенов: для него смена пароля проходит незаметно,
+// а прочие устройства разлогиниваются.
+func (s *AuthService) ChangePassword(ctx context.Context, id user.UserID, req *user.ChangePassword) (*user.SessionResult, error) {
+	u, err := s.authenticateByPassword(ctx, id, req.CurrentPassword)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.replacePassword(ctx, u, req.NewPassword); err != nil {
+		return nil, err
+	}
+	return s.session(ctx, u)
+}
+
+// replacePassword — общая часть сброса и смены: новый хеш и отзыв всех
+// refresh-токенов.
+//
+// Отзыв сессий здесь не побочный эффект, а половина смысла операции: пароль
+// меняют в том числе потому, что старый утёк, и тот, кто успел войти по
+// старому паролю, обязан потерять доступ. Выданные access-токены переживут
+// смену — до конца своего TTL (JWT_ACCESS_TTL, по умолчанию 15 минут);
+// чтобы гасить и их, нужен deny-list, которого в сервисе пока нет.
+func (s *AuthService) replacePassword(ctx context.Context, u *user.User, password string) error {
+	// Совпадение с текущим паролем — отказ, а не тихий успех: иначе смена
+	// пароля после утечки ничего не меняет, а пользователь считает иначе.
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) == nil {
+		return user.ErrPasswordUnchanged
+	}
+
+	hash, err := hashPassword(password)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.UpdatePassword(ctx, u.ID, hash); err != nil {
+		return err
+	}
+	u.PasswordHash = hash
+
+	return s.repo.DeleteAllRefreshTokens(ctx, u.ID)
+}
+
 // ---- сессии ----
 
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*user.TokenResponse, error) {
@@ -316,6 +513,14 @@ func (s *AuthService) userFromMFAToken(ctx context.Context, mfaToken string) (*u
 		return nil, user.ErrInvalidToken
 	}
 	return u, err
+}
+
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), passwordBcryptCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
 }
 
 func (s *AuthService) authenticateByPassword(ctx context.Context, id user.UserID, password string) (*user.User, error) {

@@ -35,6 +35,37 @@ type PasswordConfirm struct {
 	Password string `json:"password" validate:"required"`
 }
 
+// ForgotPassword — заявка на сброс пароля. Ответ одинаков для любого адреса,
+// поэтому в нём нет ничего, кроме сроков кода.
+type ForgotPassword struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+// ResetPassword — второй шаг сброса: код из письма плюс новый пароль.
+// Email нужен здесь, потому что сессии у сбрасывающего пароль нет по
+// определению — опознать его больше нечем.
+type ResetPassword struct {
+	Email string `json:"email" validate:"required,email"`
+	Code  string `json:"code"  validate:"required,len=6,number"`
+	// Ограничения те же, что при регистрации: max=72 — предел bcrypt.
+	Password string `json:"password" validate:"required,min=8,max=72"`
+}
+
+// ChangePassword — смена пароля изнутри сессии. Текущий пароль обязателен:
+// перехваченная сессия не должна давать права сменить пароль, иначе владельца
+// аккаунта выдавливают из него в один запрос.
+type ChangePassword struct {
+	CurrentPassword string `json:"current_password" validate:"required"`
+	NewPassword     string `json:"new_password"     validate:"required,min=8,max=72"`
+}
+
+// RestoreAccount — возврат удалённого аккаунта. Сессии у владельца нет,
+// удаление её погасило, поэтому опознание идёт по email и паролю.
+type RestoreAccount struct {
+	Email    string `json:"email"    validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
 type CreateDTO struct {
 	LastName     string
 	FirstName    string
