@@ -205,6 +205,28 @@ func TestResetPasswordRejectsCurrentPassword(t *testing.T) {
 	}
 }
 
+// Совпавший пароль — ошибка ввода, а не попытка подбора: код после неё
+// остаётся живым, и повторить сброс можно им же, без нового письма.
+func TestResetPasswordKeepsCodeAfterUnchangedPassword(t *testing.T) {
+	h := newHarness(t)
+	h.registerVerified(t, "reset-retry@example.com")
+	code := requestReset(t, h, "reset-retry@example.com")
+
+	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+		Email: "reset-retry@example.com", Code: code, Password: testPassword,
+	})
+	if !errors.Is(err, user.ErrPasswordUnchanged) {
+		t.Fatalf("same password: got %v, want ErrPasswordUnchanged", err)
+	}
+
+	if err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+		Email: "reset-retry@example.com", Code: code, Password: newPassword,
+	}); err != nil {
+		t.Fatalf("retry with the same code: %v", err)
+	}
+	login(t, h, "reset-retry@example.com", newPassword)
+}
+
 // ---- смена пароля ----
 
 func TestChangePasswordReplacesPassword(t *testing.T) {

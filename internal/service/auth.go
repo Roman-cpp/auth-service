@@ -378,7 +378,15 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword
 	// Код проверяется раньше, чем новый пароль сравнивается с текущим.
 	// Иначе порядок обратный: ErrPasswordUnchanged на произвольный пароль
 	// без кода — это оракул, по которому пароль подбирается офлайн.
-	if err := s.codes.Verify(ctx, u.ID, user.CodePurposePasswordReset, req.Code); err != nil {
+	// Сравнение при этом идёт до погашения кода: совпавший пароль — ошибка
+	// пользователя, и исправлять её он должен тем же кодом, а не новым письмом.
+	sameAsCurrent := func() error {
+		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) == nil {
+			return user.ErrPasswordUnchanged
+		}
+		return nil
+	}
+	if err := s.codes.VerifyThen(ctx, u.ID, user.CodePurposePasswordReset, req.Code, sameAsCurrent); err != nil {
 		return err
 	}
 
