@@ -83,19 +83,21 @@ func run() error {
 	}
 	go revocations.Run(ctx, log)
 
-	handlers := router.NewRouter(
-		handler.NewAuthHandler(authSvc, cfg, log),
-		handler.NewUserHandler(userSvc, cfg, log),
-		handler.NewAdminHandler(adminSvc, log),
-		authn.JWTAuth(authSvc, revocations, log),
-		authz.RequireRole(user.RoleModerator),
-	)
+	handlers := router.Handlers{
+		Auth:  handler.NewAuthHandler(authSvc, cfg, log),
+		User:  handler.NewUserHandler(userSvc, cfg, log),
+		Admin: handler.NewAdminHandler(adminSvc, log),
+	}
+	middleware := router.Middleware{
+		Authn:            authn.JWTAuth(authSvc, revocations, log),
+		RequireModerator: authz.RequireRole(user.RoleModerator),
+	}
 
 	go runCleanup(ctx, repo, sessions, cfg, log)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Service.Port,
-		Handler:           handlers,
+		Handler:           router.NewRouter(handlers, middleware),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		// Больше, чем у остальных сервисов: письмо с кодом отправляется

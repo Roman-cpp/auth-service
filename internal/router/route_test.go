@@ -12,7 +12,7 @@ import (
 // и падает на конфликте, что без единого вызова роутера иначе не всплывёт.
 func TestRouteTable(t *testing.T) {
 	pass := func(next http.Handler) http.Handler { return next }
-	r := NewRouter(nil, nil, nil, pass, pass)
+	r := NewRouter(Handlers{}, Middleware{Authn: pass, RequireModerator: pass})
 
 	registered := map[string]bool{}
 	err := chi.Walk(r.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {

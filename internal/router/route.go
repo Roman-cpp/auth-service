@@ -20,13 +20,22 @@ func limit(requests int, window time.Duration) func(http.Handler) http.Handler {
 	return httprate.Limit(requests, window, httprate.WithKeyFuncs(httprate.KeyByRealIP))
 }
 
-func NewRouter(
-	authH *handler.AuthHandler,
-	userH *handler.UserHandler,
-	adminH *handler.AdminHandler,
-	authMw func(http.Handler) http.Handler,
-	moderatorMw func(http.Handler) http.Handler,
-) http.Handler {
+// Handlers — обработчики эндпоинтов по ресурсам.
+type Handlers struct {
+	Auth  *handler.AuthHandler
+	User  *handler.UserHandler
+	Admin *handler.AdminHandler
+}
+
+// Middleware — middleware доступа. Authn кладёт личность в контекст,
+// RequireModerator читает её оттуда, поэтому ставится только после Authn.
+type Middleware struct {
+	Authn            func(http.Handler) http.Handler
+	RequireModerator func(http.Handler) http.Handler
+}
+
+func NewRouter(h Handlers, mw Middleware) http.Handler {
+
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
@@ -50,48 +59,48 @@ func NewRouter(
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
-			r.With(registerLimiter).Post("/register", authH.Register)
-			r.With(verifyLimiter).Post("/verify-email", authH.VerifyEmail)
-			r.With(resendLimiter).Post("/resend-code", authH.ResendCode)
-			r.With(loginLimiter).Post("/login", authH.Login)
-			r.With(refreshLimiter).Post("/refresh", authH.Refresh)
+			r.With(registerLimiter).Post("/register", h.Auth.Register)
+			r.With(verifyLimiter).Post("/verify-email", h.Auth.VerifyEmail)
+			r.With(resendLimiter).Post("/resend-code", h.Auth.ResendCode)
+			r.With(loginLimiter).Post("/login", h.Auth.Login)
+			r.With(refreshLimiter).Post("/refresh", h.Auth.Refresh)
 
 			// Восстановление удалённого аккаунта: сессии у владельца нет,
 			// опознание по email и паролю — значит, поверхность для перебора
 			// та же, что у входа, и лимит тот же.
-			r.With(loginLimiter).Post("/account/restore", authH.RestoreAccount)
+			r.With(loginLimiter).Post("/account/restore", h.Auth.RestoreAccount)
 
 			// Второй шаг входа. Личность берётся из mfa_token-куки,
 			// поэтому authMw здесь неприменим — access-токена ещё нет.
 			r.Route("/mfa", func(r chi.Router) {
-				r.With(verifyLimiter).Post("/verify", authH.VerifyMFA)
-				r.With(resendLimiter).Post("/resend", authH.ResendMFA)
+				r.With(verifyLimiter).Post("/verify", h.Auth.VerifyMFA)
+				r.With(resendLimiter).Post("/resend", h.Auth.ResendMFA)
 			})
 
 			// Все три маршрута про пароль держатся вместе, хотя защищены
 			// по-разному: forgot/reset доступны как раз тому, кто войти не
 			// может, а change — только изнутри сессии.
 			r.Route("/password", func(r chi.Router) {
-				r.With(resendLimiter).Post("/forgot", authH.ForgotPassword)
-				r.With(verifyLimiter).Post("/reset", authH.ResetPassword)
+				r.With(resendLimiter).Post("/forgot", h.Auth.ForgotPassword)
+				r.With(verifyLimiter).Post("/reset", h.Auth.ResetPassword)
 				// Замена временного пароля от модератора: сессии ещё нет,
 				// опознание по email и паролю — лимит как у входа.
-				r.With(loginLimiter).Post("/initial", authH.ChangeInitialPassword)
-				r.With(authMw, loginLimiter).Post("/change", authH.ChangePassword)
+				r.With(loginLimiter).Post("/initial", h.Auth.ChangeInitialPassword)
+				r.With(mw.Authn, loginLimiter).Post("/change", h.Auth.ChangePassword)
 			})
 
 			r.Group(func(r chi.Router) {
-				r.Use(authMw)
-				r.Post("/logout", authH.Logout)
+				r.Use(mw.Authn)
+				r.Post("/logout", h.Auth.Logout)
 				// Без лимитера намеренно: в /validate ходит auth_request
 				// гейтвея на КАЖДЫЙ запрос к защищённым сервисам.
-				r.Get("/validate", authH.Validate)
-				r.Get("/me", authH.Me)
+				r.Get("/validate", h.Auth.Validate)
+				r.Get("/me", h.Auth.Me)
 
 				r.Route("/2fa", func(r chi.Router) {
-					r.With(resendLimiter).Post("/enable", authH.EnableTwoFactor)
-					r.With(verifyLimiter).Post("/confirm", authH.ConfirmTwoFactor)
-					r.With(loginLimiter).Post("/disable", authH.DisableTwoFactor)
+					r.With(resendLimiter).Post("/enable", h.Auth.EnableTwoFactor)
+					r.With(verifyLimiter).Post("/confirm", h.Auth.ConfirmTwoFactor)
+					r.With(loginLimiter).Post("/disable", h.Auth.DisableTwoFactor)
 				})
 			})
 		})
@@ -99,15 +108,15 @@ func NewRouter(
 		// Админка: только для модераторов. Роль проверяется после
 		// аутентификации — moderatorMw берёт личность из контекста authMw.
 		r.Route("/admin", func(r chi.Router) {
-			r.Use(authMw, moderatorMw)
-			r.Get("/users", adminH.ListUsers)
-			r.Post("/users", adminH.CreateUser)
+			r.Use(mw.Authn, mw.RequireModerator)
+			r.Get("/users", h.Admin.ListUsers)
+			r.Post("/users", h.Admin.CreateUser)
 		})
 
 		r.Route("/users", func(r chi.Router) {
-			r.Use(authMw)
-			r.Get("/{id}", userH.GetUserByID)
-			r.Delete("/{id}", userH.DeleteUser)
+			r.Use(mw.Authn)
+			r.Get("/{id}", h.User.GetUserByID)
+			r.Delete("/{id}", h.User.DeleteUser)
 		})
 	})
 
