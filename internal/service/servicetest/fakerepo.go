@@ -1,4 +1,4 @@
-package service
+package servicetest
 
 import (
 	"context"
@@ -13,12 +13,12 @@ import (
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
-// fakeRepo — потокобезопасная реализация user.Repository и auth.Repository
+// FakeRepo — потокобезопасная реализация user.Repository и auth.Repository
 // в памяти.
 // Тесты сценариев проверяют логику, а не SQL, поэтому база им не нужна;
 // поведение, которое опирается на БД (уникальность живого кода, «ноль строк
 // = ErrNotFound»), воспроизведено здесь явно.
-type fakeRepo struct {
+type FakeRepo struct {
 	mu      sync.Mutex
 	seq     int
 	users   map[user.UserID]*user.User
@@ -30,8 +30,8 @@ type fakeRepo struct {
 	issueErr error
 }
 
-func newFakeRepo() *fakeRepo {
-	return &fakeRepo{
+func NewFakeRepo() *FakeRepo {
+	return &FakeRepo{
 		users:   map[user.UserID]*user.User{},
 		codes:   map[string]*auth.AuthCode{},
 		refresh: map[string]*auth.RefreshToken{},
@@ -40,14 +40,14 @@ func newFakeRepo() *fakeRepo {
 	}
 }
 
-func (f *fakeRepo) now() time.Time { return f.nowFunc() }
+func (f *FakeRepo) now() time.Time { return f.nowFunc() }
 
-func (f *fakeRepo) nextID(prefix string) string {
+func (f *FakeRepo) nextID(prefix string) string {
 	f.seq++
 	return fmt.Sprintf("%s-%d", prefix, f.seq)
 }
 
-func (f *fakeRepo) Upsert(_ context.Context, dto user.CreateDTO) (*user.User, error) {
+func (f *FakeRepo) Upsert(_ context.Context, dto user.CreateDTO) (*user.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -77,7 +77,7 @@ func (f *fakeRepo) Upsert(_ context.Context, dto user.CreateDTO) (*user.User, er
 
 // applyCreate повторяет DO UPDATE из SQL: перезапись заявки заменяет всё,
 // включая роль и флаги.
-func (f *fakeRepo) applyCreate(u *user.User, dto user.CreateDTO) {
+func (f *FakeRepo) applyCreate(u *user.User, dto user.CreateDTO) {
 	u.LastName, u.FirstName, u.Patronymic = dto.LastName, dto.FirstName, dto.Patronymic
 	u.PasswordHash = dto.PasswordHash
 	u.Role = dto.Role
@@ -92,7 +92,7 @@ func (f *fakeRepo) applyCreate(u *user.User, dto user.CreateDTO) {
 	u.CreatedBy = dto.CreatedBy
 }
 
-func (f *fakeRepo) GetByID(_ context.Context, id user.UserID) (*user.User, error) {
+func (f *FakeRepo) GetByID(_ context.Context, id user.UserID) (*user.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -103,7 +103,7 @@ func (f *fakeRepo) GetByID(_ context.Context, id user.UserID) (*user.User, error
 	return cloneUser(u), nil
 }
 
-func (f *fakeRepo) GetByEmail(_ context.Context, email string) (*user.User, error) {
+func (f *FakeRepo) GetByEmail(_ context.Context, email string) (*user.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -117,7 +117,7 @@ func (f *fakeRepo) GetByEmail(_ context.Context, email string) (*user.User, erro
 
 // GetDeletedByEmail повторяет ORDER BY deleted_at DESC: удалённых строк на
 // один адрес может быть несколько.
-func (f *fakeRepo) GetDeletedByEmail(_ context.Context, email string) (*user.User, error) {
+func (f *FakeRepo) GetDeletedByEmail(_ context.Context, email string) (*user.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -136,7 +136,7 @@ func (f *fakeRepo) GetDeletedByEmail(_ context.Context, email string) (*user.Use
 	return cloneUser(latest), nil
 }
 
-func (f *fakeRepo) SoftDelete(_ context.Context, id user.UserID) (time.Time, error) {
+func (f *FakeRepo) SoftDelete(_ context.Context, id user.UserID) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -152,7 +152,7 @@ func (f *fakeRepo) SoftDelete(_ context.Context, id user.UserID) (time.Time, err
 
 // Restore воспроизводит и частичный уникальный индекс (живой аккаунт с этим
 // адресом блокирует возврат), и снос неподтверждённой чужой заявки.
-func (f *fakeRepo) Restore(_ context.Context, id user.UserID) error {
+func (f *FakeRepo) Restore(_ context.Context, id user.UserID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -179,7 +179,7 @@ func (f *fakeRepo) Restore(_ context.Context, id user.UserID) error {
 
 // PurgeDeletedUsers физически удаляет строку, а вместе с ней — коды и
 // refresh-токены: в схеме это ON DELETE CASCADE.
-func (f *fakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64, error) {
+func (f *FakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -207,7 +207,7 @@ func (f *fakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64
 	return purged, nil
 }
 
-func (f *fakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
+func (f *FakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -220,7 +220,7 @@ func (f *fakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
 	return nil
 }
 
-func (f *fakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHash string) error {
+func (f *FakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -237,7 +237,7 @@ func (f *fakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHas
 
 // ListUsers: поиск подстрокой без учёта регистра, свежие сначала — как
 // ORDER BY created_at DESC, id в SQL.
-func (f *fakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*user.User, int, error) {
+func (f *FakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*user.User, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -265,7 +265,7 @@ func (f *fakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*us
 	return matched[start:end], total, nil
 }
 
-func (f *fakeRepo) PromoteModerators(_ context.Context, emails []string) (int64, error) {
+func (f *FakeRepo) PromoteModerators(_ context.Context, emails []string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -282,19 +282,19 @@ func (f *fakeRepo) PromoteModerators(_ context.Context, emails []string) (int64,
 
 // bumpTokenVersion повторяет триггеры users_bump_token_version и
 // users_record_token_revocation. Вызывается под f.mu.
-func (f *fakeRepo) bumpTokenVersion(u *user.User) {
+func (f *FakeRepo) bumpTokenVersion(u *user.User) {
 	u.TokenVersion++
 	f.revoked[u.ID] = u.TokenVersion
 }
 
-func (f *fakeRepo) TokenRevocations(context.Context) (map[user.UserID]int64, error) {
+func (f *FakeRepo) TokenRevocations(context.Context) (map[user.UserID]int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return maps.Clone(f.revoked), nil
 }
 
 // Моментов изменения фейк не хранит: уборку записей тесты не проверяют.
-func (f *fakeRepo) DeleteStaleTokenRevocations(context.Context, time.Time) error {
+func (f *FakeRepo) DeleteStaleTokenRevocations(context.Context, time.Time) error {
 	return nil
 }
 
@@ -305,7 +305,7 @@ func deref(s *string) string {
 	return *s
 }
 
-func (f *fakeRepo) SetTwoFactorEnabled(_ context.Context, id user.UserID, enabled bool) error {
+func (f *FakeRepo) SetTwoFactorEnabled(_ context.Context, id user.UserID, enabled bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -317,7 +317,7 @@ func (f *fakeRepo) SetTwoFactorEnabled(_ context.Context, id user.UserID, enable
 	return nil
 }
 
-func (f *fakeRepo) IssueAuthCode(
+func (f *FakeRepo) IssueAuthCode(
 	_ context.Context,
 	userID user.UserID,
 	purpose auth.CodePurpose,
@@ -352,7 +352,7 @@ func (f *fakeRepo) IssueAuthCode(
 	return cloneCode(code), nil
 }
 
-func (f *fakeRepo) LatestAuthCode(_ context.Context, userID user.UserID, purpose auth.CodePurpose) (*auth.AuthCode, error) {
+func (f *FakeRepo) LatestAuthCode(_ context.Context, userID user.UserID, purpose auth.CodePurpose) (*auth.AuthCode, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -371,7 +371,7 @@ func (f *fakeRepo) LatestAuthCode(_ context.Context, userID user.UserID, purpose
 	return cloneCode(latest), nil
 }
 
-func (f *fakeRepo) IncrementAuthCodeAttempts(_ context.Context, id string) (int, error) {
+func (f *FakeRepo) IncrementAuthCodeAttempts(_ context.Context, id string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -383,7 +383,7 @@ func (f *fakeRepo) IncrementAuthCodeAttempts(_ context.Context, id string) (int,
 	return c.Attempts, nil
 }
 
-func (f *fakeRepo) ConsumeAuthCode(_ context.Context, id string) error {
+func (f *FakeRepo) ConsumeAuthCode(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -396,7 +396,7 @@ func (f *fakeRepo) ConsumeAuthCode(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeRepo) DeleteExpiredAuthCodes(_ context.Context) error {
+func (f *FakeRepo) DeleteExpiredAuthCodes(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -408,7 +408,7 @@ func (f *fakeRepo) DeleteExpiredAuthCodes(_ context.Context) error {
 	return nil
 }
 
-func (f *fakeRepo) SaveRefreshToken(_ context.Context, userID user.UserID, tokenHash string, expiresAt time.Time) error {
+func (f *FakeRepo) SaveRefreshToken(_ context.Context, userID user.UserID, tokenHash string, expiresAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -422,7 +422,7 @@ func (f *fakeRepo) SaveRefreshToken(_ context.Context, userID user.UserID, token
 	return nil
 }
 
-func (f *fakeRepo) GetRefreshToken(_ context.Context, tokenHash string) (*auth.RefreshToken, error) {
+func (f *FakeRepo) GetRefreshToken(_ context.Context, tokenHash string) (*auth.RefreshToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -434,7 +434,7 @@ func (f *fakeRepo) GetRefreshToken(_ context.Context, tokenHash string) (*auth.R
 	return &clone, nil
 }
 
-func (f *fakeRepo) RevokeRefreshToken(_ context.Context, tokenHash string) error {
+func (f *FakeRepo) RevokeRefreshToken(_ context.Context, tokenHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -447,7 +447,7 @@ func (f *fakeRepo) RevokeRefreshToken(_ context.Context, tokenHash string) error
 	return nil
 }
 
-func (f *fakeRepo) DeleteRefreshToken(_ context.Context, tokenHash string) error {
+func (f *FakeRepo) DeleteRefreshToken(_ context.Context, tokenHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -455,7 +455,7 @@ func (f *fakeRepo) DeleteRefreshToken(_ context.Context, tokenHash string) error
 	return nil
 }
 
-func (f *fakeRepo) DeleteAllRefreshTokens(_ context.Context, userID user.UserID) error {
+func (f *FakeRepo) DeleteAllRefreshTokens(_ context.Context, userID user.UserID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -467,7 +467,7 @@ func (f *fakeRepo) DeleteAllRefreshTokens(_ context.Context, userID user.UserID)
 	return nil
 }
 
-func (f *fakeRepo) DeleteExpiredRefreshTokens(_ context.Context) error {
+func (f *FakeRepo) DeleteExpiredRefreshTokens(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -494,6 +494,8 @@ func cloneCode(c *auth.AuthCode) *auth.AuthCode {
 // Проверка на этапе компиляции: фейк обязан покрывать оба хранилища —
 // тестам сценариев не важно, как они разнесены в реальной базе.
 var (
-	_ user.Repository = (*fakeRepo)(nil)
-	_ auth.Repository = (*fakeRepo)(nil)
+	_ user.Repository = (*FakeRepo)(nil)
+	_ auth.Repository = (*FakeRepo)(nil)
 )
+
+func ptr[T any](v T) *T { return &v }

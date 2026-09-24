@@ -12,7 +12,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/service"
+	"github.com/krypton/auth-service/internal/service/otp"
 	"github.com/krypton/auth-service/pkg/httputil"
 )
 
@@ -64,7 +64,7 @@ var errorCatalog = []struct {
 	{user.ErrAccountDeleted, apiError{http.StatusForbidden, "account_deleted", "аккаунт удалён — его ещё можно восстановить"}},
 	{user.ErrRestoreExpired, apiError{http.StatusGone, "restore_expired", "срок восстановления аккаунта истёк"}},
 	{user.ErrAccountNotDeleted, apiError{http.StatusConflict, "account_not_deleted", "аккаунт не удалён, восстанавливать нечего"}},
-	{service.ErrMailDelivery, apiError{http.StatusBadGateway, "mail_delivery_failed", "не удалось отправить письмо, попробуйте позже"}},
+	{otp.ErrMailDelivery, apiError{http.StatusBadGateway, "mail_delivery_failed", "не удалось отправить письмо, попробуйте позже"}},
 	{user.ErrNotFound, apiError{http.StatusNotFound, "not_found", "не найдено"}},
 }
 

@@ -1,4 +1,4 @@
-package service
+package admin
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/service/passhash"
 )
 
 const (
@@ -18,18 +19,18 @@ const (
 	temporaryPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
 )
 
-// AdminService — операции админки. Право на них проверяется до сервиса,
+// Service — операции админки. Право на них проверяется до сервиса,
 // в middleware по роли (authz.RequireModerator); здесь — только правила самих
 // операций.
-type AdminService struct {
+type Service struct {
 	repo user.Repository
 }
 
-func NewAdminService(repo user.Repository) *AdminService {
-	return &AdminService{repo: repo}
+func NewService(repo user.Repository) *Service {
+	return &Service{repo: repo}
 }
 
-func (s *AdminService) ListUsers(ctx context.Context, f user.ListUsersFilter) ([]*user.AdminUserView, int, error) {
+func (s *Service) ListUsers(ctx context.Context, f user.ListUsersFilter) ([]*user.AdminUserView, int, error) {
 	if f.Limit <= 0 {
 		f.Limit = defaultListLimit
 	}
@@ -55,7 +56,7 @@ func (s *AdminService) ListUsers(ctx context.Context, f user.ListUsersFilter) ([
 //
 // Неподтверждённая заявка на тот же адрес перезаписывается, как и при
 // повторной регистрации; подтверждённый аккаунт — нет, это ErrEmailTaken.
-func (s *AdminService) CreateUser(ctx context.Context, actor user.UserID, req *user.AdminCreateUser) (*user.AdminCreateUserResult, error) {
+func (s *Service) CreateUser(ctx context.Context, actor user.UserID, req *user.AdminCreateUser) (*user.AdminCreateUserResult, error) {
 	role := req.Role
 	if role == "" {
 		role = user.RoleUser
@@ -65,7 +66,7 @@ func (s *AdminService) CreateUser(ctx context.Context, actor user.UserID, req *u
 	if err != nil {
 		return nil, err
 	}
-	hash, err := hashPassword(password)
+	hash, err := passhash.Hash(password)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,7 @@ func (s *AdminService) CreateUser(ctx context.Context, actor user.UserID, req *u
 		LastName:           strings.TrimSpace(req.LastName),
 		FirstName:          strings.TrimSpace(req.FirstName),
 		Patronymic:         trimOptional(req.Patronymic),
-		Email:              normalizeEmail(req.Email),
+		Email:              user.NormalizeEmail(req.Email),
 		PasswordHash:       hash,
 		Role:               role,
 		EmailVerified:      true,
@@ -90,10 +91,10 @@ func (s *AdminService) CreateUser(ctx context.Context, actor user.UserID, req *u
 
 // PromoteModerators выдаёт роль модератора по списку адресов из конфига.
 // Так появляется первый модератор: назначить его больше некому.
-func (s *AdminService) PromoteModerators(ctx context.Context, emails []string) (int64, error) {
+func (s *Service) PromoteModerators(ctx context.Context, emails []string) (int64, error) {
 	normalized := make([]string, 0, len(emails))
 	for _, e := range emails {
-		if e = normalizeEmail(e); e != "" {
+		if e = user.NormalizeEmail(e); e != "" {
 			normalized = append(normalized, e)
 		}
 	}

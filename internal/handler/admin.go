@@ -8,17 +8,17 @@ import (
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	authctx "github.com/krypton/auth-service/internal/platform/auth"
-	"github.com/krypton/auth-service/internal/service"
+	"github.com/krypton/auth-service/internal/service/admin"
 )
 
 // AdminHandler — ручки админки. Доступ к ним закрыт RequireModerator
 // на уровне роутера, поэтому сами обработчики роль не проверяют.
 type AdminHandler struct {
 	base
-	svc *service.AdminService
+	svc *admin.Service
 }
 
-func NewAdminHandler(svc *service.AdminService, log *slog.Logger) *AdminHandler {
+func NewAdminHandler(svc *admin.Service, log *slog.Logger) *AdminHandler {
 	return &AdminHandler{base: base{log: log}, svc: svc}
 }
 

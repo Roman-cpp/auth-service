@@ -1,4 +1,4 @@
-package service
+package token_test
 
 import (
 	"strings"
@@ -8,6 +8,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/service/servicetest"
+	"github.com/krypton/auth-service/internal/service/token"
 )
 
 // Главная проверка всей затеи: токен первого шага не должен открывать доступ
@@ -15,43 +17,43 @@ import (
 // секретом, проходил валидацию как access — второй фактор обходился
 // предъявлением токена, выданного ДО ввода кода.
 func TestMFATokenIsRejectedAsAccessToken(t *testing.T) {
-	h := newHarness(t)
-	u := h.registerVerified(t, "mfa-typ@example.com")
+	h := servicetest.New(t)
+	u := h.RegisterVerified(t, "mfa-typ@example.com")
 
-	mfaToken, err := h.tokens.IssueMFAToken(u)
+	mfaToken, err := h.Tokens.IssueMFAToken(u)
 	if err != nil {
 		t.Fatalf("issue mfa token: %v", err)
 	}
 
-	if _, err := h.tokens.ParseAccessToken(mfaToken); err != auth.ErrInvalidToken {
+	if _, err := h.Tokens.ParseAccessToken(mfaToken); err != auth.ErrInvalidToken {
 		t.Fatalf("MFA token accepted as access token (err = %v)", err)
 	}
 }
 
 func TestAccessTokenIsRejectedAsMFAToken(t *testing.T) {
-	h := newHarness(t)
-	u := h.registerVerified(t, "access-typ@example.com")
+	h := servicetest.New(t)
+	u := h.RegisterVerified(t, "access-typ@example.com")
 
-	tokens, err := h.tokens.IssueSession(t.Context(), u)
+	tokens, err := h.Tokens.IssueSession(t.Context(), u)
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
 
-	if _, err := h.tokens.ParseMFAToken(tokens.AccessToken); err != auth.ErrInvalidToken {
+	if _, err := h.Tokens.ParseMFAToken(tokens.AccessToken); err != auth.ErrInvalidToken {
 		t.Fatalf("access token accepted as MFA token (err = %v)", err)
 	}
 }
 
 func TestAccessTokenRoundTrip(t *testing.T) {
-	h := newHarness(t)
-	u := h.registerVerified(t, "roundtrip@example.com")
+	h := servicetest.New(t)
+	u := h.RegisterVerified(t, "roundtrip@example.com")
 
-	tokens, err := h.tokens.IssueSession(t.Context(), u)
+	tokens, err := h.Tokens.IssueSession(t.Context(), u)
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
 
-	claims, err := h.tokens.ParseAccessToken(tokens.AccessToken)
+	claims, err := h.Tokens.ParseAccessToken(tokens.AccessToken)
 	if err != nil {
 		t.Fatalf("parse access token: %v", err)
 	}
@@ -64,16 +66,17 @@ func TestAccessTokenRoundTrip(t *testing.T) {
 }
 
 func TestExpiredTokenIsRejected(t *testing.T) {
-	h := newHarness(t)
-	u := h.registerVerified(t, "expired@example.com")
+	h := servicetest.New(t)
+	u := h.RegisterVerified(t, "expired@example.com")
 
-	h.tokens.cfg.AccessTokenTTL = -time.Minute
-	tokens, err := h.tokens.IssueSession(t.Context(), u)
+	cfg := h.JWTCfg
+	cfg.AccessTokenTTL = -time.Minute
+	tokens, err := token.NewIssuer(h.Repo, cfg).IssueSession(t.Context(), u)
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
 
-	if _, err := h.tokens.ParseAccessToken(tokens.AccessToken); err != auth.ErrInvalidToken {
+	if _, err := h.Tokens.ParseAccessToken(tokens.AccessToken); err != auth.ErrInvalidToken {
 		t.Fatalf("expired token accepted (err = %v)", err)
 	}
 }
@@ -81,7 +84,7 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 // alg=none — классическая подмена алгоритма. Проверяем, что список
 // допустимых методов в парсере действительно её отсекает.
 func TestUnsignedTokenIsRejected(t *testing.T) {
-	h := newHarness(t)
+	h := servicetest.New(t)
 
 	claims := &auth.Claims{
 		TokenType: auth.TokenTypeAccess,
@@ -97,23 +100,24 @@ func TestUnsignedTokenIsRejected(t *testing.T) {
 		t.Fatalf("sign none: %v", err)
 	}
 
-	if _, err := h.tokens.ParseAccessToken(unsigned); err != auth.ErrInvalidToken {
+	if _, err := h.Tokens.ParseAccessToken(unsigned); err != auth.ErrInvalidToken {
 		t.Fatalf("alg=none token accepted (err = %v)", err)
 	}
 }
 
 func TestTokenSignedWithAnotherSecretIsRejected(t *testing.T) {
-	h := newHarness(t)
-	u := h.registerVerified(t, "foreign@example.com")
+	h := servicetest.New(t)
+	u := h.RegisterVerified(t, "foreign@example.com")
 
-	foreign := NewTokenIssuer(h.repo, h.jwtCfg)
-	foreign.cfg.Secret = strings.Repeat("other-secret-", 4)
+	cfg := h.JWTCfg
+	cfg.Secret = strings.Repeat("other-secret-", 4)
+	foreign := token.NewIssuer(h.Repo, cfg)
 
 	token, err := foreign.IssueMFAToken(u)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	if _, err := h.tokens.ParseMFAToken(token); err != auth.ErrInvalidToken {
+	if _, err := h.Tokens.ParseMFAToken(token); err != auth.ErrInvalidToken {
 		t.Fatalf("token signed with a foreign secret accepted (err = %v)", err)
 	}
 }

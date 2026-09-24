@@ -1,4 +1,4 @@
-package service
+package token
 
 import (
 	"context"
@@ -14,20 +14,20 @@ import (
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
-// TokenIssuer — единственное место, где выпускаются и разбираются токены.
-type TokenIssuer struct {
+// Issuer — единственное место, где выпускаются и разбираются токены.
+type Issuer struct {
 	repo auth.Repository
 	cfg  config.JWTConfig
 }
 
-func NewTokenIssuer(repo auth.Repository, cfg config.JWTConfig) *TokenIssuer {
-	return &TokenIssuer{repo: repo, cfg: cfg}
+func NewIssuer(repo auth.Repository, cfg config.JWTConfig) *Issuer {
+	return &Issuer{repo: repo, cfg: cfg}
 }
 
 // IssueSession выдаёт пару access + refresh. Вызывается только после того,
 // как пройдены ВСЕ факторы: пароль, подтверждённая почта и, если включена,
 // двухфакторная проверка.
-func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*auth.TokenResponse, error) {
+func (t *Issuer) IssueSession(ctx context.Context, u *user.User) (*auth.TokenResponse, error) {
 	accessToken, expiresAt, err := t.sign(u, auth.TokenTypeAccess, t.cfg.AccessTokenTTL)
 	if err != nil {
 		return nil, err
@@ -37,7 +37,7 @@ func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*auth.Tok
 	if err != nil {
 		return nil, err
 	}
-	if err := t.repo.SaveRefreshToken(ctx, u.ID, HashRefreshToken(refreshToken), time.Now().Add(t.cfg.RefreshTokenTTL)); err != nil {
+	if err := t.repo.SaveRefreshToken(ctx, u.ID, HashRefresh(refreshToken), time.Now().Add(t.cfg.RefreshTokenTTL)); err != nil {
 		return nil, err
 	}
 
@@ -51,20 +51,20 @@ func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*auth.Tok
 // IssueMFAToken выдаёт промежуточный токен между вводом пароля и вводом кода.
 // Он подтверждает только первый фактор и по типу отличается от access —
 // предъявить его вместо access-токена нельзя.
-func (t *TokenIssuer) IssueMFAToken(u *user.User) (string, error) {
+func (t *Issuer) IssueMFAToken(u *user.User) (string, error) {
 	token, _, err := t.sign(u, auth.TokenTypeMFA, t.cfg.MFATokenTTL)
 	return token, err
 }
 
-func (t *TokenIssuer) ParseAccessToken(token string) (*auth.Claims, error) {
+func (t *Issuer) ParseAccessToken(token string) (*auth.Claims, error) {
 	return t.parse(token, auth.TokenTypeAccess)
 }
 
-func (t *TokenIssuer) ParseMFAToken(token string) (*auth.Claims, error) {
+func (t *Issuer) ParseMFAToken(token string) (*auth.Claims, error) {
 	return t.parse(token, auth.TokenTypeMFA)
 }
 
-func (t *TokenIssuer) sign(u *user.User, typ auth.TokenType, ttl time.Duration) (string, time.Time, error) {
+func (t *Issuer) sign(u *user.User, typ auth.TokenType, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 	claims := &auth.Claims{
@@ -84,7 +84,7 @@ func (t *TokenIssuer) sign(u *user.User, typ auth.TokenType, ttl time.Duration) 
 	return signed, expiresAt, err
 }
 
-func (t *TokenIssuer) parse(tokenStr string, want auth.TokenType) (*auth.Claims, error) {
+func (t *Issuer) parse(tokenStr string, want auth.TokenType) (*auth.Claims, error) {
 	claims := &auth.Claims{}
 	token, err := jwt.ParseWithClaims(tokenStr, claims,
 		func(*jwt.Token) (any, error) { return []byte(t.cfg.Secret), nil },
@@ -122,10 +122,10 @@ func generateRefreshToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// HashRefreshToken: в БД хранится только SHA-256 от токена — утечка таблицы
+// HashRefresh: в БД хранится только SHA-256 от токена — утечка таблицы
 // refresh_tokens не даёт угнать сессии. Быстрый хеш здесь уместен (в отличие
 // от одноразовых кодов): в токене 256 бит энтропии, перебирать нечего.
-func HashRefreshToken(token string) string {
+func HashRefresh(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }

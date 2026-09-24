@@ -1,4 +1,4 @@
-package service
+package user
 
 import (
 	"context"
@@ -10,23 +10,29 @@ import (
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
-type UserService struct {
+type Service struct {
 	repo        user.Repository
 	sessions    auth.Repository
 	revocations RevocationSyncer
 	cfg         config.AccountConfig
 }
 
-func NewUserService(
+// RevocationSyncer — удаление аккаунта отзывает его токены, и Sync нужен,
+// чтобы на этом экземпляре отзыв действовал сразу.
+type RevocationSyncer interface {
+	Sync(ctx context.Context) error
+}
+
+func NewService(
 	repo user.Repository,
 	sessions auth.Repository,
 	revocations RevocationSyncer,
 	cfg config.AccountConfig,
-) *UserService {
-	return &UserService{repo: repo, sessions: sessions, revocations: revocations, cfg: cfg}
+) *Service {
+	return &Service{repo: repo, sessions: sessions, revocations: revocations, cfg: cfg}
 }
 
-func (s *UserService) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
+func (s *Service) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
 	return s.repo.GetByID(ctx, id)
 }
 
@@ -37,7 +43,7 @@ func (s *UserService) GetByID(ctx context.Context, id user.UserID) (*user.User, 
 // Адрес, впрочем, освобождается сразу: уникальность email считается только
 // среди живых аккаунтов. Пока на него никто не зарегистрировался, удалённый
 // аккаунт восстановим; как только зарегистрировался — нет.
-func (s *UserService) DeleteUser(ctx context.Context, id user.UserID) (time.Time, error) {
+func (s *Service) DeleteUser(ctx context.Context, id user.UserID) (time.Time, error) {
 	deletedAt, err := s.repo.SoftDelete(ctx, id)
 	if err != nil {
 		return time.Time{}, err

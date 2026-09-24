@@ -14,7 +14,7 @@ import "context"
 type Identity struct {
 	UserID string
 	// Role берётся из токена. Устареть она не может: смена роли отзывает
-	// все выданные токены пользователя (см. service.RevocationList).
+	// все выданные токены пользователя (см. revocation.List).
 	Role string
 }
 

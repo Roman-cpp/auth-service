@@ -1,4 +1,4 @@
-package service
+package revocation
 
 import (
 	"context"
@@ -11,26 +11,31 @@ import (
 )
 
 const (
-	// RevocationSyncInterval — как часто подтягивать отзывы, сделанные мимо
+	// SyncInterval — как часто подтягивать отзывы, сделанные мимо
 	// этого экземпляра (другим экземпляром или вручную в базе). Это же —
 	// предельная задержка их действия.
-	RevocationSyncInterval = 5 * time.Second
-	// revocationMaxStaleness: если список не обновлялся дольше, база, скорее
+	SyncInterval = 5 * time.Second
+	// maxStaleness: если список не обновлялся дольше, база, скорее
 	// всего, недоступна, и отзыв, сделанный за это время, мог быть пропущен.
 	// Тогда токены не принимаются вовсе — лучше отказать, чем пропустить
 	// разжалованного модератора.
-	revocationMaxStaleness = time.Minute
+	maxStaleness = time.Minute
 )
 
-// RevocationList — копия token_revocations в памяти. По ней каждый
+// Source — всё, что списку нужно от хранилища.
+type Source interface {
+	TokenRevocations(ctx context.Context) (map[user.UserID]int64, error)
+}
+
+// List — копия token_revocations в памяти. По ней каждый
 // access-токен проверяется без запроса к базе: токен отозван, если его
 // версия ниже текущей версии пользователя.
 //
 // Таблица маленькая (только пользователи с отзывом за последний TTL
 // access-токена), поэтому синхронизация — полная перезагрузка, а не выборка
 // изменений: так не теряются транзакции, закоммиченные позже своего NOW().
-type RevocationList struct {
-	repo auth.Repository
+type List struct {
+	repo Source
 	now  func() time.Time
 
 	mu       sync.RWMutex
@@ -38,14 +43,14 @@ type RevocationList struct {
 	syncedAt time.Time
 }
 
-func NewRevocationList(repo auth.Repository) *RevocationList {
-	return &RevocationList{repo: repo, now: time.Now, versions: map[user.UserID]int64{}}
+func NewList(repo Source) *List {
+	return &List{repo: repo, now: time.Now, versions: map[user.UserID]int64{}}
 }
 
 // Sync перечитывает таблицу целиком. Вызывается по таймеру и сразу после
 // операций этого экземпляра, которые отзывают токены, — чтобы они
 // действовали немедленно, а не к следующему тику.
-func (l *RevocationList) Sync(ctx context.Context) error {
+func (l *List) Sync(ctx context.Context) error {
 	versions, err := l.repo.TokenRevocations(ctx)
 	if err != nil {
 		return err
@@ -60,11 +65,11 @@ func (l *RevocationList) Sync(ctx context.Context) error {
 
 // Check возвращает ErrInvalidToken для отозванного токена и
 // ErrRevocationsStale, если список слишком давно не обновлялся.
-func (l *RevocationList) Check(id user.UserID, version int64) error {
+func (l *List) Check(id user.UserID, version int64) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	if l.now().Sub(l.syncedAt) > revocationMaxStaleness {
+	if l.now().Sub(l.syncedAt) > maxStaleness {
 		return auth.ErrRevocationsStale
 	}
 	if current, ok := l.versions[id]; ok && version < current {
@@ -75,8 +80,8 @@ func (l *RevocationList) Check(id user.UserID, version int64) error {
 
 // Run держит список свежим до отмены ctx. Ошибка синхронизации не роняет
 // сервис: старый список продолжает действовать, пока не устареет.
-func (l *RevocationList) Run(ctx context.Context, log *slog.Logger) {
-	ticker := time.NewTicker(RevocationSyncInterval)
+func (l *List) Run(ctx context.Context, log *slog.Logger) {
+	ticker := time.NewTicker(SyncInterval)
 	defer ticker.Stop()
 
 	for {

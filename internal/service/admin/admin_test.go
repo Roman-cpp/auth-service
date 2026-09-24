@@ -1,4 +1,4 @@
-package service
+package admin
 
 import (
 	"errors"
@@ -7,14 +7,15 @@ import (
 
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/service/servicetest"
 )
 
-func (h *harness) admin() *AdminService { return NewAdminService(h.repo) }
+func admin(h *servicetest.Harness) *Service { return NewService(h.Repo) }
 
-func (h *harness) createByModerator(t *testing.T, email string, role user.Role) *user.AdminCreateUserResult {
+func createByModerator(t *testing.T, h *servicetest.Harness, email string, role user.Role) *user.AdminCreateUserResult {
 	t.Helper()
-	mod := h.registerVerified(t, "moderator@example.com")
-	res, err := h.admin().CreateUser(t.Context(), mod.ID, &user.AdminCreateUser{
+	mod := h.RegisterVerified(t, "moderator@example.com")
+	res, err := admin(h).CreateUser(t.Context(), mod.ID, &user.AdminCreateUser{
 		LastName: "Петров", FirstName: "Пётр", Email: email, Role: role,
 	})
 	if err != nil {
@@ -24,8 +25,8 @@ func (h *harness) createByModerator(t *testing.T, email string, role user.Role) 
 }
 
 func TestModeratorCreatesUserWithTemporaryPassword(t *testing.T) {
-	h := newHarness(t)
-	res := h.createByModerator(t, "New@Example.com ", "")
+	h := servicetest.New(t)
+	res := createByModerator(t, h, "New@Example.com ", "")
 
 	if res.User.Email != "new@example.com" {
 		t.Errorf("email not normalized: %q", res.User.Email)
@@ -40,33 +41,33 @@ func TestModeratorCreatesUserWithTemporaryPassword(t *testing.T) {
 		strings.Trim(res.TemporaryPassword, temporaryPasswordAlphabet) != "" {
 		t.Errorf("bad temporary password %q", res.TemporaryPassword)
 	}
-	if h.mails.count() != 1 { // только письмо модератору при его регистрации
-		t.Errorf("creating a user must not send mail, sent %d", h.mails.count())
+	if h.Mails.Count() != 1 { // только письмо модератору при его регистрации
+		t.Errorf("creating a user must not send mail, sent %d", h.Mails.Count())
 	}
 }
 
 func TestTemporaryPasswordDoesNotOpenSession(t *testing.T) {
-	h := newHarness(t)
-	res := h.createByModerator(t, "temp@example.com", "")
+	h := servicetest.New(t)
+	res := createByModerator(t, h, "temp@example.com", "")
 
-	_, err := h.auth.Login(t.Context(), &auth.Login{Email: "temp@example.com", Password: res.TemporaryPassword})
+	_, err := h.Auth.Login(t.Context(), &auth.Login{Email: "temp@example.com", Password: res.TemporaryPassword})
 	if !errors.Is(err, auth.ErrPasswordChangeRequired) {
 		t.Fatalf("login with temporary password: got %v, want ErrPasswordChangeRequired", err)
 	}
 
 	// Неверный пароль по-прежнему неотличим от неизвестного аккаунта.
-	_, err = h.auth.Login(t.Context(), &auth.Login{Email: "temp@example.com", Password: "wrong-password"})
+	_, err = h.Auth.Login(t.Context(), &auth.Login{Email: "temp@example.com", Password: "wrong-password"})
 	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("wrong password: got %v, want ErrInvalidCredentials", err)
 	}
 }
 
 func TestChangeInitialPasswordOpensSession(t *testing.T) {
-	h := newHarness(t)
-	res := h.createByModerator(t, "init@example.com", "")
+	h := servicetest.New(t)
+	res := createByModerator(t, h, "init@example.com", "")
 
-	result, err := h.auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
-		Email: "init@example.com", Password: res.TemporaryPassword, NewPassword: testPassword,
+	result, err := h.Auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
+		Email: "init@example.com", Password: res.TemporaryPassword, NewPassword: servicetest.Password,
 	})
 	if err != nil {
 		t.Fatalf("change initial password: %v", err)
@@ -75,16 +76,16 @@ func TestChangeInitialPasswordOpensSession(t *testing.T) {
 		t.Fatal("expected a session, got MFA challenge")
 	}
 
-	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "init@example.com", Password: testPassword}); err != nil {
+	if _, err := h.Auth.Login(t.Context(), &auth.Login{Email: "init@example.com", Password: servicetest.Password}); err != nil {
 		t.Fatalf("login with own password: %v", err)
 	}
 	// Временный пароль больше не действует.
-	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "init@example.com", Password: res.TemporaryPassword}); !errors.Is(err, auth.ErrInvalidCredentials) {
+	if _, err := h.Auth.Login(t.Context(), &auth.Login{Email: "init@example.com", Password: res.TemporaryPassword}); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("old temporary password: got %v, want ErrInvalidCredentials", err)
 	}
 	// И повторная «первая смена» невозможна.
-	_, err = h.auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
-		Email: "init@example.com", Password: testPassword, NewPassword: "another-password",
+	_, err = h.Auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
+		Email: "init@example.com", Password: servicetest.Password, NewPassword: "another-password",
 	})
 	if !errors.Is(err, auth.ErrNoTemporaryPassword) {
 		t.Fatalf("second initial change: got %v, want ErrNoTemporaryPassword", err)
@@ -92,10 +93,10 @@ func TestChangeInitialPasswordOpensSession(t *testing.T) {
 }
 
 func TestChangeInitialPasswordRejectsSamePasswordAndWrongCredentials(t *testing.T) {
-	h := newHarness(t)
-	res := h.createByModerator(t, "same@example.com", "")
+	h := servicetest.New(t)
+	res := createByModerator(t, h, "same@example.com", "")
 
-	_, err := h.auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
+	_, err := h.Auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
 		Email: "same@example.com", Password: res.TemporaryPassword, NewPassword: res.TemporaryPassword,
 	})
 	if !errors.Is(err, auth.ErrPasswordUnchanged) {
@@ -103,21 +104,21 @@ func TestChangeInitialPasswordRejectsSamePasswordAndWrongCredentials(t *testing.
 	}
 
 	for _, req := range []*auth.ChangeInitialPassword{
-		{Email: "same@example.com", Password: "wrong-password", NewPassword: testPassword},
-		{Email: "nobody@example.com", Password: "whatever", NewPassword: testPassword},
+		{Email: "same@example.com", Password: "wrong-password", NewPassword: servicetest.Password},
+		{Email: "nobody@example.com", Password: "whatever", NewPassword: servicetest.Password},
 	} {
-		if _, err := h.auth.ChangeInitialPassword(t.Context(), req); !errors.Is(err, auth.ErrInvalidCredentials) {
+		if _, err := h.Auth.ChangeInitialPassword(t.Context(), req); !errors.Is(err, auth.ErrInvalidCredentials) {
 			t.Errorf("%s: got %v, want ErrInvalidCredentials", req.Email, err)
 		}
 	}
 }
 
 func TestCreateUserDoesNotOverwriteVerifiedAccount(t *testing.T) {
-	h := newHarness(t)
-	h.registerVerified(t, "taken@example.com")
-	mod := h.registerVerified(t, "mod@example.com")
+	h := servicetest.New(t)
+	h.RegisterVerified(t, "taken@example.com")
+	mod := h.RegisterVerified(t, "mod@example.com")
 
-	_, err := h.admin().CreateUser(t.Context(), mod.ID, &user.AdminCreateUser{
+	_, err := admin(h).CreateUser(t.Context(), mod.ID, &user.AdminCreateUser{
 		LastName: "X", FirstName: "Y", Email: "taken@example.com",
 	})
 	if !errors.Is(err, user.ErrEmailTaken) {
@@ -126,13 +127,13 @@ func TestCreateUserDoesNotOverwriteVerifiedAccount(t *testing.T) {
 }
 
 func TestPromoteModerators(t *testing.T) {
-	h := newHarness(t)
-	u := h.registerVerified(t, "boss@example.com")
-	admin := h.admin()
+	h := servicetest.New(t)
+	u := h.RegisterVerified(t, "boss@example.com")
+	admin := admin(h)
 
 	role := func() user.Role {
 		t.Helper()
-		got, err := h.repo.GetByID(t.Context(), u.ID)
+		got, err := h.Repo.GetByID(t.Context(), u.ID)
 		if err != nil {
 			t.Fatalf("get user: %v", err)
 		}
@@ -155,12 +156,12 @@ func TestPromoteModerators(t *testing.T) {
 }
 
 func TestListUsersSearchAndPaging(t *testing.T) {
-	h := newHarness(t)
+	h := servicetest.New(t)
 	for _, e := range []string{"a@example.com", "b@example.com", "c@other.org"} {
-		h.registerVerified(t, e)
+		h.RegisterVerified(t, e)
 	}
 
-	users, total, err := h.admin().ListUsers(t.Context(), user.ListUsersFilter{Query: "EXAMPLE", Limit: 1})
+	users, total, err := admin(h).ListUsers(t.Context(), user.ListUsersFilter{Query: "EXAMPLE", Limit: 1})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestListUsersSearchAndPaging(t *testing.T) {
 		t.Fatalf("got %d of %d, want 1 of 2", len(users), total)
 	}
 
-	_, total, _ = h.admin().ListUsers(t.Context(), user.ListUsersFilter{Limit: 1000})
+	_, total, _ = admin(h).ListUsers(t.Context(), user.ListUsersFilter{Limit: 1000})
 	if total != 3 {
 		t.Fatalf("total without query = %d, want 3", total)
 	}

@@ -3,7 +3,10 @@
 // (токены, одноразовые коды, сценарии аутентификации), — в пакете auth.
 package user
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type UserID = string
 
@@ -91,4 +94,10 @@ func NewAdminUserView(u *User) *AdminUserView {
 		MustChangePassword: u.MustChangePassword,
 		CreatedBy:          u.CreatedBy,
 	}
+}
+
+// NormalizeEmail: без него Foo@example.com и foo@example.com становятся
+// разными аккаунтами, а уникальный индекс по email их не ловит.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }

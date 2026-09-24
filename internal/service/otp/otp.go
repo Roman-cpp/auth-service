@@ -1,4 +1,4 @@
-package service
+package otp
 
 import (
 	"context"
@@ -33,17 +33,17 @@ var codeSpace = big.NewInt(1_000_000)
 // будет ждать письмо, которого не будет.
 var ErrMailDelivery = errors.New("cannot deliver email")
 
-// CodeService выпускает и проверяет одноразовые коды. Все три сценария
+// Service выпускает и проверяет одноразовые коды. Все три сценария
 // (подтверждение почты, второй фактор входа, включение 2FA) отличаются
 // только значением purpose и текстом письма.
-type CodeService struct {
+type Service struct {
 	repo   auth.Repository
 	mailer *mailer.Mailer
 	cfg    config.CodesConfig
 }
 
-func NewCodeService(repo auth.Repository, m *mailer.Mailer, cfg config.CodesConfig) *CodeService {
-	return &CodeService{repo: repo, mailer: m, cfg: cfg}
+func NewService(repo auth.Repository, m *mailer.Mailer, cfg config.CodesConfig) *Service {
+	return &Service{repo: repo, mailer: m, cfg: cfg}
 }
 
 // Issue выпускает новый код и отправляет его письмом. Предыдущий живой код
@@ -56,7 +56,7 @@ func NewCodeService(repo auth.Repository, m *mailer.Mailer, cfg config.CodesConf
 //
 // Письмо отправляется синхронно: если SMTP недоступен, пользователь должен
 // увидеть ошибку сразу, а не ждать письмо, которого не будет.
-func (s *CodeService) Issue(
+func (s *Service) Issue(
 	ctx context.Context,
 	u *user.User,
 	purpose auth.CodePurpose,
@@ -99,7 +99,7 @@ func (s *CodeService) Issue(
 // Verify проверяет код и гасит его. Гасится он и при успехе, и только при
 // успехе: неверная попытка лишь увеличивает счётчик, иначе любой желающий
 // мог бы сжечь чужой код одним неправильным вводом.
-func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose auth.CodePurpose, code string) error {
+func (s *Service) Verify(ctx context.Context, userID user.UserID, purpose auth.CodePurpose, code string) error {
 	return s.VerifyThen(ctx, userID, purpose, code, nil)
 }
 
@@ -108,7 +108,7 @@ func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose au
 // причине, которую пользователь исправит сам (новый пароль совпал со
 // старым): без неё код сгорал бы, и за исправлением пришлось бы идти
 // с новым письмом. Если check вернул ошибку, код остаётся живым.
-func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpose auth.CodePurpose, code string, check func() error) error {
+func (s *Service) VerifyThen(ctx context.Context, userID user.UserID, purpose auth.CodePurpose, code string, check func() error) error {
 	stored, err := s.repo.LatestAuthCode(ctx, userID, purpose)
 	if errors.Is(err, user.ErrNotFound) {
 		return auth.ErrCodeInvalid
@@ -161,11 +161,11 @@ func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpos
 // Challenge собирает ответ для клиента, не выпуская код. Нужен там, где
 // нельзя раскрывать существование аккаунта: клиент получает те же сроки,
 // что и при реальной отправке.
-func (s *CodeService) Challenge(now time.Time) *auth.CodeChallenge {
+func (s *Service) Challenge(now time.Time) *auth.CodeChallenge {
 	return s.challenge(now, now.Add(s.cfg.TTL))
 }
 
-func (s *CodeService) challenge(issuedAt, expiresAt time.Time) *auth.CodeChallenge {
+func (s *Service) challenge(issuedAt, expiresAt time.Time) *auth.CodeChallenge {
 	return &auth.CodeChallenge{
 		ExpiresAt:     expiresAt,
 		ResendAfterAt: issuedAt.Add(s.cfg.ResendCooldown),
@@ -178,7 +178,7 @@ func (s *CodeService) challenge(issuedAt, expiresAt time.Time) *auth.CodeChallen
 //
 // Ограничение живёт здесь, а не в httprate: тот умеет ключевать только по IP
 // и заголовкам, а письма на один ящик заказывают с разных адресов.
-func (s *CodeService) activeWithinCooldown(ctx context.Context, userID user.UserID, purpose auth.CodePurpose) (*auth.AuthCode, error) {
+func (s *Service) activeWithinCooldown(ctx context.Context, userID user.UserID, purpose auth.CodePurpose) (*auth.AuthCode, error) {
 	last, err := s.repo.LatestAuthCode(ctx, userID, purpose)
 	if errors.Is(err, user.ErrNotFound) {
 		return nil, nil

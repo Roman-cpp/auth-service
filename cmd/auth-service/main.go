@@ -18,7 +18,12 @@ import (
 	"github.com/krypton/auth-service/internal/middleware/authz"
 	"github.com/krypton/auth-service/internal/repository"
 	"github.com/krypton/auth-service/internal/router"
-	"github.com/krypton/auth-service/internal/service"
+	"github.com/krypton/auth-service/internal/service/admin"
+	"github.com/krypton/auth-service/internal/service/auth"
+	"github.com/krypton/auth-service/internal/service/otp"
+	"github.com/krypton/auth-service/internal/service/revocation"
+	"github.com/krypton/auth-service/internal/service/token"
+	"github.com/krypton/auth-service/internal/service/user"
 )
 
 const (
@@ -61,12 +66,12 @@ func run() error {
 	sessions := repository.NewAuthRepository(pool)
 	mail := mailer.New(mailer.NewSender(cfg.SMTP, log), cfg.SMTP.FromName)
 
-	tokens := service.NewTokenIssuer(sessions, cfg.JWT)
-	codes := service.NewCodeService(sessions, mail, cfg.Codes)
-	revocations := service.NewRevocationList(sessions)
-	authSvc := service.NewAuthService(repo, sessions, tokens, codes, revocations, cfg.Account)
-	userSvc := service.NewUserService(repo, sessions, revocations, cfg.Account)
-	adminSvc := service.NewAdminService(repo)
+	tokens := token.NewIssuer(sessions, cfg.JWT)
+	codes := otp.NewService(sessions, mail, cfg.Codes)
+	revocations := revocation.NewList(sessions)
+	authSvc := auth.NewService(repo, sessions, tokens, codes, revocations, cfg.Account)
+	userSvc := user.NewService(repo, sessions, revocations, cfg.Account)
+	adminSvc := admin.NewService(repo)
 
 	// Не фатально: без этого сервис работает, просто без новых модераторов.
 	if promoted, err := adminSvc.PromoteModerators(ctx, cfg.Account.ModeratorEmails); err != nil {

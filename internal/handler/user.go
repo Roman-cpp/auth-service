@@ -8,16 +8,16 @@ import (
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	authctx "github.com/krypton/auth-service/internal/platform/auth"
-	"github.com/krypton/auth-service/internal/service"
+	userservice "github.com/krypton/auth-service/internal/service/user"
 )
 
 type UserHandler struct {
 	base
-	svc     *service.UserService
+	svc     *userservice.Service
 	cookies *CookieManager
 }
 
-func NewUserHandler(svc *service.UserService, cfg *config.Config, log *slog.Logger) *UserHandler {
+func NewUserHandler(svc *userservice.Service, cfg *config.Config, log *slog.Logger) *UserHandler {
 	return &UserHandler{base: base{log: log}, svc: svc, cookies: NewCookieManager(cfg)}
 }
 
