@@ -12,7 +12,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krypton/auth-service/internal/config"
-	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/handler"
 	"github.com/krypton/auth-service/internal/mailer"
 	"github.com/krypton/auth-service/internal/middleware/authn"
@@ -90,7 +89,7 @@ func run() error {
 	}
 	middleware := router.Middleware{
 		Authn:            authn.JWTAuth(authSvc, revocations, log),
-		RequireModerator: authz.RequireRole(user.RoleModerator),
+		RequireModerator: authz.RequireModerator,
 	}
 
 	go runCleanup(ctx, repo, sessions, cfg, log)

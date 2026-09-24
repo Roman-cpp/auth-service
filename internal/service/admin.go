@@ -19,7 +19,7 @@ const (
 )
 
 // AdminService — операции админки. Право на них проверяется до сервиса,
-// в middleware по роли (authz.RequireRole); здесь — только правила самих
+// в middleware по роли (authz.RequireModerator); здесь — только правила самих
 // операций.
 type AdminService struct {
 	repo user.Repository
