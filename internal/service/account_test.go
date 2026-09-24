@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
@@ -21,7 +22,7 @@ func TestDeletedAccountFreesItsEmail(t *testing.T) {
 		t.Fatal("re-registration reused the deleted account instead of creating a new one")
 	}
 
-	if _, err := h.auth.Login(t.Context(), &user.Login{
+	if _, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "reuse@example.com", Password: testPassword,
 	}); err != nil {
 		t.Fatalf("login into the new account: %v", err)
@@ -44,7 +45,7 @@ func TestRestoreBringsBackTheSameAccount(t *testing.T) {
 
 	// Настройки аккаунта переживают удаление: второй фактор как был включён,
 	// так и остался, и вход после восстановления требует его снова.
-	res, err := h.auth.Login(t.Context(), &user.Login{
+	res, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "restore-ok@example.com", Password: testPassword,
 	})
 	if err != nil {
@@ -61,7 +62,7 @@ func TestRestoreRequiresPassword(t *testing.T) {
 	h.deleteAccount(t, u.ID)
 
 	_, err := h.auth.RestoreAccount(t.Context(), "restore-pwd@example.com", "wrong-password")
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -71,7 +72,7 @@ func TestRestoreHidesUnknownAccounts(t *testing.T) {
 	h := newHarness(t)
 
 	_, err := h.auth.RestoreAccount(t.Context(), "ghost@example.com", testPassword)
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -145,7 +146,7 @@ func TestLoginOnDeletedAccountPointsToRestore(t *testing.T) {
 	u := h.registerVerified(t, "login-deleted@example.com")
 	h.deleteAccount(t, u.ID)
 
-	_, err := h.auth.Login(t.Context(), &user.Login{
+	_, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "login-deleted@example.com", Password: testPassword,
 	})
 	if !errors.Is(err, user.ErrAccountDeleted) {
@@ -160,10 +161,10 @@ func TestLoginOnDeletedAccountHidesItFromStrangers(t *testing.T) {
 	u := h.registerVerified(t, "login-deleted-wrong@example.com")
 	h.deleteAccount(t, u.ID)
 
-	_, err := h.auth.Login(t.Context(), &user.Login{
+	_, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "login-deleted-wrong@example.com", Password: "wrong-password",
 	})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -176,10 +177,10 @@ func TestLoginOnExpiredDeletionLooksLikeUnknownAccount(t *testing.T) {
 	h.deleteAccount(t, u.ID)
 	h.ageDeletion(t, u.ID, h.account.RestoreWindow+time.Hour)
 
-	_, err := h.auth.Login(t.Context(), &user.Login{
+	_, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "login-expired@example.com", Password: testPassword,
 	})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -196,7 +197,7 @@ func TestDeleteReturnsRestoreDeadlineAndRevokesSessions(t *testing.T) {
 		t.Errorf("restore deadline = %s, want ~%s", until, want)
 	}
 
-	if _, err := h.auth.Refresh(t.Context(), session.Tokens.RefreshToken); !errors.Is(err, user.ErrInvalidToken) {
+	if _, err := h.auth.Refresh(t.Context(), session.Tokens.RefreshToken); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("refresh after deletion: got %v, want ErrInvalidToken", err)
 	}
 }
@@ -222,7 +223,7 @@ func TestPurgeRemovesAccountsPastTheWindow(t *testing.T) {
 		t.Fatalf("restore a recently deleted account: %v", err)
 	}
 	// Просроченный исчез совсем — теперь это просто неизвестный адрес.
-	if _, err := h.auth.RestoreAccount(t.Context(), "purge-stale@example.com", testPassword); !errors.Is(err, user.ErrInvalidCredentials) {
+	if _, err := h.auth.RestoreAccount(t.Context(), "purge-stale@example.com", testPassword); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("restore a purged account: got %v, want ErrInvalidCredentials", err)
 	}
 }

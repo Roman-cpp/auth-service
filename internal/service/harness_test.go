@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/mailer"
 )
@@ -104,8 +105,8 @@ func newHarness(t *testing.T) *harness {
 		mails:   sender,
 		tokens:  tokens,
 		codes:   codes,
-		auth:    NewAuthService(repo, tokens, codes, revoked, accountCfg),
-		users:   NewUserService(repo, revoked, accountCfg),
+		auth:    NewAuthService(repo, repo, tokens, codes, revoked, accountCfg),
+		users:   NewUserService(repo, repo, revoked, accountCfg),
 		revoked: revoked,
 		jwtCfg:  jwtCfg,
 		account: accountCfg,
@@ -147,14 +148,14 @@ func (h *harness) registerVerified(t *testing.T, email string) *user.User {
 	t.Helper()
 	ctx := context.Background()
 
-	if _, err := h.auth.Register(ctx, &user.Register{
+	if _, err := h.auth.Register(ctx, &auth.Register{
 		LastName: "Иванов", FirstName: "Иван", Email: email, Password: testPassword,
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
 	code := h.mails.last(t).code
-	if _, err := h.auth.VerifyEmail(ctx, &user.VerifyCode{Email: email, Code: code}); err != nil {
+	if _, err := h.auth.VerifyEmail(ctx, &auth.VerifyCode{Email: email, Code: code}); err != nil {
 		t.Fatalf("verify email: %v", err)
 	}
 
@@ -166,7 +167,7 @@ func (h *harness) registerVerified(t *testing.T, email string) *user.User {
 }
 
 // expireCode сдвигает срок жизни последнего кода в прошлое.
-func (h *harness) expireCode(t *testing.T, userID user.UserID, purpose user.CodePurpose) {
+func (h *harness) expireCode(t *testing.T, userID user.UserID, purpose auth.CodePurpose) {
 	t.Helper()
 	h.repo.mu.Lock()
 	defer h.repo.mu.Unlock()
@@ -182,7 +183,7 @@ func (h *harness) expireCode(t *testing.T, userID user.UserID, purpose user.Code
 
 // passCooldown отматывает время выдачи кода назад, чтобы не ждать кулдаун
 // в реальном времени.
-func (h *harness) passCooldown(t *testing.T, userID user.UserID, purpose user.CodePurpose) {
+func (h *harness) passCooldown(t *testing.T, userID user.UserID, purpose auth.CodePurpose) {
 	t.Helper()
 	h.repo.mu.Lock()
 	defer h.repo.mu.Unlock()

@@ -9,10 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
-// fakeRepo — потокобезопасная реализация user.Repository в памяти.
+// fakeRepo — потокобезопасная реализация user.Repository и auth.Repository
+// в памяти.
 // Тесты сценариев проверяют логику, а не SQL, поэтому база им не нужна;
 // поведение, которое опирается на БД (уникальность живого кода, «ноль строк
 // = ErrNotFound»), воспроизведено здесь явно.
@@ -20,8 +22,8 @@ type fakeRepo struct {
 	mu      sync.Mutex
 	seq     int
 	users   map[user.UserID]*user.User
-	codes   map[string]*user.AuthCode
-	refresh map[string]*user.RefreshToken
+	codes   map[string]*auth.AuthCode
+	refresh map[string]*auth.RefreshToken
 	// revoked повторяет таблицу token_revocations, которую в базе ведёт триггер.
 	revoked  map[user.UserID]int64
 	nowFunc  func() time.Time
@@ -31,8 +33,8 @@ type fakeRepo struct {
 func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
 		users:   map[user.UserID]*user.User{},
-		codes:   map[string]*user.AuthCode{},
-		refresh: map[string]*user.RefreshToken{},
+		codes:   map[string]*auth.AuthCode{},
+		refresh: map[string]*auth.RefreshToken{},
 		revoked: map[user.UserID]int64{},
 		nowFunc: time.Now,
 	}
@@ -318,10 +320,10 @@ func (f *fakeRepo) SetTwoFactorEnabled(_ context.Context, id user.UserID, enable
 func (f *fakeRepo) IssueAuthCode(
 	_ context.Context,
 	userID user.UserID,
-	purpose user.CodePurpose,
+	purpose auth.CodePurpose,
 	codeHash string,
 	expiresAt time.Time,
-) (*user.AuthCode, error) {
+) (*auth.AuthCode, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -338,7 +340,7 @@ func (f *fakeRepo) IssueAuthCode(
 		}
 	}
 
-	code := &user.AuthCode{
+	code := &auth.AuthCode{
 		ID:        f.nextID("code"),
 		UserID:    userID,
 		Purpose:   purpose,
@@ -350,11 +352,11 @@ func (f *fakeRepo) IssueAuthCode(
 	return cloneCode(code), nil
 }
 
-func (f *fakeRepo) LatestAuthCode(_ context.Context, userID user.UserID, purpose user.CodePurpose) (*user.AuthCode, error) {
+func (f *fakeRepo) LatestAuthCode(_ context.Context, userID user.UserID, purpose auth.CodePurpose) (*auth.AuthCode, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	var latest *user.AuthCode
+	var latest *auth.AuthCode
 	for _, c := range f.codes {
 		if c.UserID != userID || c.Purpose != purpose {
 			continue
@@ -410,7 +412,7 @@ func (f *fakeRepo) SaveRefreshToken(_ context.Context, userID user.UserID, token
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.refresh[tokenHash] = &user.RefreshToken{
+	f.refresh[tokenHash] = &auth.RefreshToken{
 		ID:        f.nextID("rt"),
 		UserID:    userID,
 		TokenHash: tokenHash,
@@ -420,7 +422,7 @@ func (f *fakeRepo) SaveRefreshToken(_ context.Context, userID user.UserID, token
 	return nil
 }
 
-func (f *fakeRepo) GetRefreshToken(_ context.Context, tokenHash string) (*user.RefreshToken, error) {
+func (f *fakeRepo) GetRefreshToken(_ context.Context, tokenHash string) (*auth.RefreshToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -484,10 +486,14 @@ func cloneUser(u *user.User) *user.User {
 	return &clone
 }
 
-func cloneCode(c *user.AuthCode) *user.AuthCode {
+func cloneCode(c *auth.AuthCode) *auth.AuthCode {
 	clone := *c
 	return &clone
 }
 
-// Проверка на этапе компиляции: фейк обязан покрывать весь интерфейс.
-var _ user.Repository = (*fakeRepo)(nil)
+// Проверка на этапе компиляции: фейк обязан покрывать оба хранилища —
+// тестам сценариев не важно, как они разнесены в реальной базе.
+var (
+	_ user.Repository = (*fakeRepo)(nil)
+	_ auth.Repository = (*fakeRepo)(nil)
+)

@@ -59,13 +59,14 @@ func run() error {
 	}
 
 	repo := repository.NewUserRepository(pool)
+	sessions := repository.NewAuthRepository(pool)
 	mail := mailer.New(mailer.NewSender(cfg.SMTP, log), cfg.SMTP.FromName)
 
-	tokens := service.NewTokenIssuer(repo, cfg.JWT)
-	codes := service.NewCodeService(repo, mail, cfg.Codes)
-	revocations := service.NewRevocationList(repo)
-	authSvc := service.NewAuthService(repo, tokens, codes, revocations, cfg.Account)
-	userSvc := service.NewUserService(repo, revocations, cfg.Account)
+	tokens := service.NewTokenIssuer(sessions, cfg.JWT)
+	codes := service.NewCodeService(sessions, mail, cfg.Codes)
+	revocations := service.NewRevocationList(sessions)
+	authSvc := service.NewAuthService(repo, sessions, tokens, codes, revocations, cfg.Account)
+	userSvc := service.NewUserService(repo, sessions, revocations, cfg.Account)
 	adminSvc := service.NewAdminService(repo)
 
 	// Не фатально: без этого сервис работает, просто без новых модераторов.
@@ -90,7 +91,7 @@ func run() error {
 		authz.RequireRole(user.RoleModerator),
 	)
 
-	go runCleanup(ctx, repo, cfg, log)
+	go runCleanup(ctx, repo, sessions, cfg, log)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Service.Port,
@@ -145,7 +146,13 @@ func newLogger(cfg config.ServiceConfig) *slog.Logger {
 // runCleanup убирает протухшие refresh-токены и одноразовые коды, а также
 // аккаунты, у которых кончилось окно восстановления. Первые две таблицы
 // растут при каждом входе, и без уборки чистятся только вручную.
-func runCleanup(ctx context.Context, repo *repository.UserRepository, cfg *config.Config, log *slog.Logger) {
+func runCleanup(
+	ctx context.Context,
+	repo *repository.UserRepository,
+	sessions *repository.AuthRepository,
+	cfg *config.Config,
+	log *slog.Logger,
+) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
@@ -154,17 +161,17 @@ func runCleanup(ctx context.Context, repo *repository.UserRepository, cfg *confi
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := repo.DeleteExpiredRefreshTokens(ctx); err != nil {
+			if err := sessions.DeleteExpiredRefreshTokens(ctx); err != nil {
 				log.Error("cleanup refresh tokens", slog.Any("error", err))
 			}
-			if err := repo.DeleteExpiredAuthCodes(ctx); err != nil {
+			if err := sessions.DeleteExpiredAuthCodes(ctx); err != nil {
 				log.Error("cleanup auth codes", slog.Any("error", err))
 			}
 			// Запись об отзыве нужна, пока жив хоть один токен со старой
 			// версией, — не дольше TTL access-токена. Запас — на случай,
 			// если TTL успели поднять, пока токены ещё живы.
 			staleBefore := time.Now().Add(-2 * cfg.JWT.AccessTokenTTL)
-			if err := repo.DeleteStaleTokenRevocations(ctx, staleBefore); err != nil {
+			if err := sessions.DeleteStaleTokenRevocations(ctx, staleBefore); err != nil {
 				log.Error("cleanup token revocations", slog.Any("error", err))
 			}
 

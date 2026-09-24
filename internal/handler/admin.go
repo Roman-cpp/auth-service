@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/platform/auth"
+	authctx "github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/internal/service"
 )
 
@@ -42,9 +43,9 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
-	actor, ok := auth.UserIDFrom(r.Context())
+	actor, ok := authctx.UserIDFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "admin_create_user", user.ErrInvalidToken)
+		h.fail(w, r, "admin_create_user", auth.ErrInvalidToken)
 		return
 	}
 

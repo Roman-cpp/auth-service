@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
@@ -48,14 +49,14 @@ func TestTemporaryPasswordDoesNotOpenSession(t *testing.T) {
 	h := newHarness(t)
 	res := h.createByModerator(t, "temp@example.com", "")
 
-	_, err := h.auth.Login(t.Context(), &user.Login{Email: "temp@example.com", Password: res.TemporaryPassword})
-	if !errors.Is(err, user.ErrPasswordChangeRequired) {
+	_, err := h.auth.Login(t.Context(), &auth.Login{Email: "temp@example.com", Password: res.TemporaryPassword})
+	if !errors.Is(err, auth.ErrPasswordChangeRequired) {
 		t.Fatalf("login with temporary password: got %v, want ErrPasswordChangeRequired", err)
 	}
 
 	// Неверный пароль по-прежнему неотличим от неизвестного аккаунта.
-	_, err = h.auth.Login(t.Context(), &user.Login{Email: "temp@example.com", Password: "wrong-password"})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	_, err = h.auth.Login(t.Context(), &auth.Login{Email: "temp@example.com", Password: "wrong-password"})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("wrong password: got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -64,7 +65,7 @@ func TestChangeInitialPasswordOpensSession(t *testing.T) {
 	h := newHarness(t)
 	res := h.createByModerator(t, "init@example.com", "")
 
-	result, err := h.auth.ChangeInitialPassword(t.Context(), &user.ChangeInitialPassword{
+	result, err := h.auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
 		Email: "init@example.com", Password: res.TemporaryPassword, NewPassword: testPassword,
 	})
 	if err != nil {
@@ -74,18 +75,18 @@ func TestChangeInitialPasswordOpensSession(t *testing.T) {
 		t.Fatal("expected a session, got MFA challenge")
 	}
 
-	if _, err := h.auth.Login(t.Context(), &user.Login{Email: "init@example.com", Password: testPassword}); err != nil {
+	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "init@example.com", Password: testPassword}); err != nil {
 		t.Fatalf("login with own password: %v", err)
 	}
 	// Временный пароль больше не действует.
-	if _, err := h.auth.Login(t.Context(), &user.Login{Email: "init@example.com", Password: res.TemporaryPassword}); !errors.Is(err, user.ErrInvalidCredentials) {
+	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "init@example.com", Password: res.TemporaryPassword}); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("old temporary password: got %v, want ErrInvalidCredentials", err)
 	}
 	// И повторная «первая смена» невозможна.
-	_, err = h.auth.ChangeInitialPassword(t.Context(), &user.ChangeInitialPassword{
+	_, err = h.auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
 		Email: "init@example.com", Password: testPassword, NewPassword: "another-password",
 	})
-	if !errors.Is(err, user.ErrNoTemporaryPassword) {
+	if !errors.Is(err, auth.ErrNoTemporaryPassword) {
 		t.Fatalf("second initial change: got %v, want ErrNoTemporaryPassword", err)
 	}
 }
@@ -94,18 +95,18 @@ func TestChangeInitialPasswordRejectsSamePasswordAndWrongCredentials(t *testing.
 	h := newHarness(t)
 	res := h.createByModerator(t, "same@example.com", "")
 
-	_, err := h.auth.ChangeInitialPassword(t.Context(), &user.ChangeInitialPassword{
+	_, err := h.auth.ChangeInitialPassword(t.Context(), &auth.ChangeInitialPassword{
 		Email: "same@example.com", Password: res.TemporaryPassword, NewPassword: res.TemporaryPassword,
 	})
-	if !errors.Is(err, user.ErrPasswordUnchanged) {
+	if !errors.Is(err, auth.ErrPasswordUnchanged) {
 		t.Fatalf("same password: got %v, want ErrPasswordUnchanged", err)
 	}
 
-	for _, req := range []*user.ChangeInitialPassword{
+	for _, req := range []*auth.ChangeInitialPassword{
 		{Email: "same@example.com", Password: "wrong-password", NewPassword: testPassword},
 		{Email: "nobody@example.com", Password: "whatever", NewPassword: testPassword},
 	} {
-		if _, err := h.auth.ChangeInitialPassword(t.Context(), req); !errors.Is(err, user.ErrInvalidCredentials) {
+		if _, err := h.auth.ChangeInitialPassword(t.Context(), req); !errors.Is(err, auth.ErrInvalidCredentials) {
 			t.Errorf("%s: got %v, want ErrInvalidCredentials", req.Email, err)
 		}
 	}

@@ -4,12 +4,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
-func register(t *testing.T, h *harness, email string) *user.RegisterResult {
+func register(t *testing.T, h *harness, email string) *auth.RegisterResult {
 	t.Helper()
-	res, err := h.auth.Register(t.Context(), &user.Register{
+	res, err := h.auth.Register(t.Context(), &auth.Register{
 		LastName: "Иванов", FirstName: "Иван", Email: email, Password: testPassword,
 	})
 	if err != nil {
@@ -31,8 +32,8 @@ func TestRegisterDoesNotOpenSession(t *testing.T) {
 
 	// До подтверждения почты вход закрыт — иначе второй фактор регистрации
 	// не значит ничего.
-	_, err := h.auth.Login(t.Context(), &user.Login{Email: "fresh@example.com", Password: testPassword})
-	if !errors.Is(err, user.ErrEmailNotVerified) {
+	_, err := h.auth.Login(t.Context(), &auth.Login{Email: "fresh@example.com", Password: testPassword})
+	if !errors.Is(err, auth.ErrEmailNotVerified) {
 		t.Fatalf("login before verification: got %v, want ErrEmailNotVerified", err)
 	}
 }
@@ -42,7 +43,7 @@ func TestVerifyEmailOpensSession(t *testing.T) {
 	register(t, h, "verify@example.com")
 	code := h.mails.last(t).code
 
-	res, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "verify@example.com", Code: code})
+	res, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "verify@example.com", Code: code})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestVerifyEmailOpensSession(t *testing.T) {
 		t.Fatal("expected a token pair after verification")
 	}
 
-	if _, err := h.auth.Login(t.Context(), &user.Login{Email: "verify@example.com", Password: testPassword}); err != nil {
+	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "verify@example.com", Password: testPassword}); err != nil {
 		t.Fatalf("login after verification: %v", err)
 	}
 }
@@ -59,8 +60,8 @@ func TestVerifyEmailRejectsWrongCode(t *testing.T) {
 	h := newHarness(t)
 	register(t, h, "wrong@example.com")
 
-	_, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "wrong@example.com", Code: "000000"})
-	if !errors.Is(err, user.ErrCodeInvalid) {
+	_, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "wrong@example.com", Code: "000000"})
+	if !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -70,8 +71,8 @@ func TestVerifyEmailRejectsWrongCode(t *testing.T) {
 func TestVerifyEmailHidesUnknownAccounts(t *testing.T) {
 	h := newHarness(t)
 
-	_, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "nobody@example.com", Code: "123456"})
-	if !errors.Is(err, user.ErrCodeInvalid) {
+	_, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "nobody@example.com", Code: "123456"})
+	if !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -81,12 +82,12 @@ func TestCodeIsSingleUse(t *testing.T) {
 	register(t, h, "once@example.com")
 	code := h.mails.last(t).code
 
-	if _, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "once@example.com", Code: code}); err != nil {
+	if _, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "once@example.com", Code: code}); err != nil {
 		t.Fatalf("first verify: %v", err)
 	}
 
-	_, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "once@example.com", Code: code})
-	if !errors.Is(err, user.ErrEmailVerified) {
+	_, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "once@example.com", Code: code})
+	if !errors.Is(err, auth.ErrEmailVerified) {
 		t.Fatalf("second verify: got %v, want ErrEmailVerified", err)
 	}
 }
@@ -98,16 +99,16 @@ func TestCodeAttemptsAreLimited(t *testing.T) {
 
 	// MaxAttempts в харнессе = 3.
 	for i := range 3 {
-		_, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "bruteforce@example.com", Code: "000000"})
-		if !errors.Is(err, user.ErrCodeInvalid) {
+		_, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "bruteforce@example.com", Code: "000000"})
+		if !errors.Is(err, auth.ErrCodeInvalid) {
 			t.Fatalf("attempt %d: got %v, want ErrCodeInvalid", i+1, err)
 		}
 	}
 
 	// Верный код после исчерпания попыток тоже не принимается — иначе
 	// лимит обходится подбором до последнего шанса.
-	_, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "bruteforce@example.com", Code: code})
-	if !errors.Is(err, user.ErrCodeAttempts) {
+	_, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "bruteforce@example.com", Code: code})
+	if !errors.Is(err, auth.ErrCodeAttempts) {
 		t.Fatalf("after limit: got %v, want ErrCodeAttempts", err)
 	}
 }
@@ -121,10 +122,10 @@ func TestExpiredCodeIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
-	h.expireCode(t, u.ID, user.CodePurposeEmailVerify)
+	h.expireCode(t, u.ID, auth.CodePurposeEmailVerify)
 
-	_, err = h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "stale@example.com", Code: code})
-	if !errors.Is(err, user.ErrCodeExpired) {
+	_, err = h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "stale@example.com", Code: code})
+	if !errors.Is(err, auth.ErrCodeExpired) {
 		t.Fatalf("got %v, want ErrCodeExpired", err)
 	}
 }
@@ -147,7 +148,7 @@ func TestResendWithinCooldownDoesNotSendSecondEmail(t *testing.T) {
 	}
 
 	// Код из первого письма обязан продолжать работать.
-	if _, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{
+	if _, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{
 		Email: "resend@example.com", Code: h.mails.last(t).code,
 	}); err != nil {
 		t.Fatalf("verify with the original code: %v", err)
@@ -176,7 +177,7 @@ func TestResendSupersedesPreviousCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
-	h.passCooldown(t, u.ID, user.CodePurposeEmailVerify)
+	h.passCooldown(t, u.ID, auth.CodePurposeEmailVerify)
 
 	if _, err := h.auth.ResendEmailVerification(t.Context(), "supersede@example.com"); err != nil {
 		t.Fatalf("resend: %v", err)
@@ -186,10 +187,10 @@ func TestResendSupersedesPreviousCode(t *testing.T) {
 		t.Skip("сгенерированы одинаковые коды — маловероятная случайность, проверка неинформативна")
 	}
 
-	if _, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "supersede@example.com", Code: first}); !errors.Is(err, user.ErrCodeInvalid) {
+	if _, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "supersede@example.com", Code: first}); !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("old code: got %v, want ErrCodeInvalid", err)
 	}
-	if _, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "supersede@example.com", Code: second}); err != nil {
+	if _, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "supersede@example.com", Code: second}); err != nil {
 		t.Fatalf("new code: %v", err)
 	}
 }
@@ -220,19 +221,19 @@ func TestUnverifiedRegistrationCanBeReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
-	h.passCooldown(t, u.ID, user.CodePurposeEmailVerify)
+	h.passCooldown(t, u.ID, auth.CodePurposeEmailVerify)
 
-	if _, err := h.auth.Register(t.Context(), &user.Register{
+	if _, err := h.auth.Register(t.Context(), &auth.Register{
 		LastName: "Петров", FirstName: "Пётр", Email: "squat@example.com", Password: "another-password",
 	}); err != nil {
 		t.Fatalf("re-register unverified: %v", err)
 	}
 
 	code := h.mails.last(t).code
-	if _, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "squat@example.com", Code: code}); err != nil {
+	if _, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "squat@example.com", Code: code}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if _, err := h.auth.Login(t.Context(), &user.Login{Email: "squat@example.com", Password: "another-password"}); err != nil {
+	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "squat@example.com", Password: "another-password"}); err != nil {
 		t.Fatalf("login with new password: %v", err)
 	}
 }
@@ -241,7 +242,7 @@ func TestVerifiedAccountCannotBeOverwritten(t *testing.T) {
 	h := newHarness(t)
 	h.registerVerified(t, "taken@example.com")
 
-	_, err := h.auth.Register(t.Context(), &user.Register{
+	_, err := h.auth.Register(t.Context(), &auth.Register{
 		LastName: "Петров", FirstName: "Пётр", Email: "taken@example.com", Password: "hijack-attempt",
 	})
 	if !errors.Is(err, user.ErrEmailTaken) {
@@ -254,10 +255,10 @@ func TestEmailIsCaseInsensitive(t *testing.T) {
 	register(t, h, "  MiXeD@Example.COM ")
 	code := h.mails.last(t).code
 
-	if _, err := h.auth.VerifyEmail(t.Context(), &user.VerifyCode{Email: "mixed@example.com", Code: code}); err != nil {
+	if _, err := h.auth.VerifyEmail(t.Context(), &auth.VerifyCode{Email: "mixed@example.com", Code: code}); err != nil {
 		t.Fatalf("verify with lowercase: %v", err)
 	}
-	if _, err := h.auth.Login(t.Context(), &user.Login{Email: "MIXED@EXAMPLE.COM", Password: testPassword}); err != nil {
+	if _, err := h.auth.Login(t.Context(), &auth.Login{Email: "MIXED@EXAMPLE.COM", Password: testPassword}); err != nil {
 		t.Fatalf("login with uppercase: %v", err)
 	}
 }
@@ -266,8 +267,8 @@ func TestLoginRejectsWrongPassword(t *testing.T) {
 	h := newHarness(t)
 	h.registerVerified(t, "pwd@example.com")
 
-	_, err := h.auth.Login(t.Context(), &user.Login{Email: "pwd@example.com", Password: "nope"})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	_, err := h.auth.Login(t.Context(), &auth.Login{Email: "pwd@example.com", Password: "nope"})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -275,8 +276,8 @@ func TestLoginRejectsWrongPassword(t *testing.T) {
 func TestLoginOnUnknownEmailLooksTheSame(t *testing.T) {
 	h := newHarness(t)
 
-	_, err := h.auth.Login(t.Context(), &user.Login{Email: "nobody@example.com", Password: testPassword})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	_, err := h.auth.Login(t.Context(), &auth.Login{Email: "nobody@example.com", Password: testPassword})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }

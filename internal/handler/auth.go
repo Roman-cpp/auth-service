@@ -5,8 +5,9 @@ import (
 	"net/http"
 
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/platform/auth"
+	authctx "github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/internal/service"
 )
 
@@ -27,7 +28,7 @@ func NewAuthHandler(svc *service.AuthService, cfg *config.Config, log *slog.Logg
 // Register — первый шаг регистрации: аккаунт заведён, код ушёл на почту,
 // сессии нет. Куки здесь намеренно не выставляются.
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.Register](w, r)
+	req, ok := decodeJSON[auth.Register](w, r)
 	if !ok {
 		return
 	}
@@ -46,7 +47,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 // VerifyEmail — второй шаг регистрации. Успех сразу открывает сессию.
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.VerifyCode](w, r)
+	req, ok := decodeJSON[auth.VerifyCode](w, r)
 	if !ok {
 		return
 	}
@@ -64,7 +65,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 // ResendCode отвечает одинаково для известного и неизвестного адреса —
 // иначе эндпоинт превращается в проверку «есть ли такой аккаунт».
 func (h *AuthHandler) ResendCode(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.ResendCode](w, r)
+	req, ok := decodeJSON[auth.ResendCode](w, r)
 	if !ok {
 		return
 	}
@@ -82,7 +83,7 @@ func (h *AuthHandler) ResendCode(w http.ResponseWriter, r *http.Request) {
 // второй фактор. Во втором случае в ответе нет данных пользователя — до
 // ввода кода раскрывать их нечего.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.Login](w, r)
+	req, ok := decodeJSON[auth.Login](w, r)
 	if !ok {
 		return
 	}
@@ -99,7 +100,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 // ChangeInitialPassword — замена временного пароля. Отвечает так же, как
 // Login: пароль сменён, и вход сразу продолжается.
 func (h *AuthHandler) ChangeInitialPassword(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.ChangeInitialPassword](w, r)
+	req, ok := decodeJSON[auth.ChangeInitialPassword](w, r)
 	if !ok {
 		return
 	}
@@ -113,7 +114,7 @@ func (h *AuthHandler) ChangeInitialPassword(w http.ResponseWriter, r *http.Reque
 	h.writeLoginResult(w, result)
 }
 
-func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, result *user.LoginResult) {
+func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, result *auth.LoginResult) {
 	if result.MFARequired() {
 		h.cookies.SetMFACookie(w, result.MFAToken)
 		writeData(w, http.StatusOK, map[string]any{
@@ -133,11 +134,11 @@ func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, result *user.Login
 func (h *AuthHandler) VerifyMFA(w http.ResponseWriter, r *http.Request) {
 	token := cookieValue(r, mfaTokenCookie)
 	if token == "" {
-		h.fail(w, r, "verify_mfa", user.ErrInvalidToken)
+		h.fail(w, r, "verify_mfa", auth.ErrInvalidToken)
 		return
 	}
 
-	req, ok := decodeJSON[user.MFAVerify](w, r)
+	req, ok := decodeJSON[auth.MFAVerify](w, r)
 	if !ok {
 		return
 	}
@@ -155,7 +156,7 @@ func (h *AuthHandler) VerifyMFA(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) ResendMFA(w http.ResponseWriter, r *http.Request) {
 	token := cookieValue(r, mfaTokenCookie)
 	if token == "" {
-		h.fail(w, r, "resend_mfa", user.ErrInvalidToken)
+		h.fail(w, r, "resend_mfa", auth.ErrInvalidToken)
 		return
 	}
 
@@ -173,7 +174,7 @@ func (h *AuthHandler) ResendMFA(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	token := cookieValue(r, refreshTokenCookie)
 	if token == "" {
-		h.fail(w, r, "refresh", user.ErrInvalidToken)
+		h.fail(w, r, "refresh", auth.ErrInvalidToken)
 		return
 	}
 
@@ -204,9 +205,9 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 // подпись и отзыв токена, здесь только личность из него — в заголовки,
 // которые gateway пробрасывает сервисам.
 func (h *AuthHandler) Validate(w http.ResponseWriter, r *http.Request) {
-	id, ok := auth.IdentityFrom(r.Context())
+	id, ok := authctx.IdentityFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "validate", user.ErrInvalidToken)
+		h.fail(w, r, "validate", auth.ErrInvalidToken)
 		return
 	}
 
@@ -218,9 +219,9 @@ func (h *AuthHandler) Validate(w http.ResponseWriter, r *http.Request) {
 // Me — профиль вошедшего пользователя для фронтенда: читается из базы,
 // потому что в токене есть только id и роль.
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
+	userID, ok := authctx.UserIDFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "me", user.ErrInvalidToken)
+		h.fail(w, r, "me", auth.ErrInvalidToken)
 		return
 	}
 
@@ -242,7 +243,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 // после восстановления нужно войти обычным путём, со вторым фактором, если
 // он включён.
 func (h *AuthHandler) RestoreAccount(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.RestoreAccount](w, r)
+	req, ok := decodeJSON[auth.RestoreAccount](w, r)
 	if !ok {
 		return
 	}
@@ -261,7 +262,7 @@ func (h *AuthHandler) RestoreAccount(w http.ResponseWriter, r *http.Request) {
 // ForgotPassword отвечает одинаково для известного и неизвестного адреса —
 // как и ResendCode, иначе эндпоинт превращается в проверку «есть ли аккаунт».
 func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.ForgotPassword](w, r)
+	req, ok := decodeJSON[auth.ForgotPassword](w, r)
 	if !ok {
 		return
 	}
@@ -278,7 +279,7 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 // ResetPassword намеренно не открывает сессию: после смены пароля нужно
 // войти заново — в том числе со вторым фактором, если он включён.
 func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeJSON[user.ResetPassword](w, r)
+	req, ok := decodeJSON[auth.ResetPassword](w, r)
 	if !ok {
 		return
 	}
@@ -297,12 +298,12 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 // ChangePassword выдаёт новую пару токенов: старая отозвана вместе со всеми
 // остальными сессиями, и без замены текущий клиент разлогинился бы сам.
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
+	userID, ok := authctx.UserIDFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "change_password", user.ErrInvalidToken)
+		h.fail(w, r, "change_password", auth.ErrInvalidToken)
 		return
 	}
-	req, ok := decodeJSON[user.ChangePassword](w, r)
+	req, ok := decodeJSON[auth.ChangePassword](w, r)
 	if !ok {
 		return
 	}
@@ -320,12 +321,12 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 // ---- управление вторым фактором ----
 
 func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
+	userID, ok := authctx.UserIDFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "enable_2fa", user.ErrInvalidToken)
+		h.fail(w, r, "enable_2fa", auth.ErrInvalidToken)
 		return
 	}
-	req, ok := decodeJSON[user.PasswordConfirm](w, r)
+	req, ok := decodeJSON[auth.PasswordConfirm](w, r)
 	if !ok {
 		return
 	}
@@ -340,12 +341,12 @@ func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
+	userID, ok := authctx.UserIDFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "confirm_2fa", user.ErrInvalidToken)
+		h.fail(w, r, "confirm_2fa", auth.ErrInvalidToken)
 		return
 	}
-	req, ok := decodeJSON[user.MFAVerify](w, r)
+	req, ok := decodeJSON[auth.MFAVerify](w, r)
 	if !ok {
 		return
 	}
@@ -360,12 +361,12 @@ func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
+	userID, ok := authctx.UserIDFrom(r.Context())
 	if !ok {
-		h.fail(w, r, "disable_2fa", user.ErrInvalidToken)
+		h.fail(w, r, "disable_2fa", auth.ErrInvalidToken)
 		return
 	}
-	req, ok := decodeJSON[user.PasswordConfirm](w, r)
+	req, ok := decodeJSON[auth.PasswordConfirm](w, r)
 	if !ok {
 		return
 	}

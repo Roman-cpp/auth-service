@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/service"
 	"github.com/krypton/auth-service/pkg/httputil"
@@ -49,16 +50,16 @@ var errorCatalog = []struct {
 	api apiError
 }{
 	{user.ErrEmailTaken, apiError{http.StatusConflict, "email_taken", "этот адрес уже зарегистрирован"}},
-	{user.ErrInvalidCredentials, apiError{http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль"}},
-	{user.ErrEmailNotVerified, apiError{http.StatusForbidden, "email_not_verified", "адрес почты не подтверждён"}},
-	{user.ErrEmailVerified, apiError{http.StatusConflict, "email_already_verified", "адрес почты уже подтверждён"}},
-	{user.ErrCodeExpired, apiError{http.StatusBadRequest, "code_expired", "срок действия кода истёк"}},
-	{user.ErrCodeAttempts, apiError{http.StatusTooManyRequests, "too_many_attempts", "слишком много неверных попыток, запросите новый код"}},
-	{user.ErrCodeInvalid, apiError{http.StatusBadRequest, "invalid_code", "неверный код подтверждения"}},
-	{user.ErrInvalidToken, apiError{http.StatusUnauthorized, "invalid_token", "сессия недействительна или истекла"}},
-	{user.ErrPasswordUnchanged, apiError{http.StatusBadRequest, "password_unchanged", "новый пароль совпадает с текущим"}},
-	{user.ErrPasswordChangeRequired, apiError{http.StatusForbidden, "password_change_required", "пароль временный — задайте собственный"}},
-	{user.ErrNoTemporaryPassword, apiError{http.StatusConflict, "password_not_temporary", "пароль уже не временный — войдите обычным способом"}},
+	{auth.ErrInvalidCredentials, apiError{http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль"}},
+	{auth.ErrEmailNotVerified, apiError{http.StatusForbidden, "email_not_verified", "адрес почты не подтверждён"}},
+	{auth.ErrEmailVerified, apiError{http.StatusConflict, "email_already_verified", "адрес почты уже подтверждён"}},
+	{auth.ErrCodeExpired, apiError{http.StatusBadRequest, "code_expired", "срок действия кода истёк"}},
+	{auth.ErrCodeAttempts, apiError{http.StatusTooManyRequests, "too_many_attempts", "слишком много неверных попыток, запросите новый код"}},
+	{auth.ErrCodeInvalid, apiError{http.StatusBadRequest, "invalid_code", "неверный код подтверждения"}},
+	{auth.ErrInvalidToken, apiError{http.StatusUnauthorized, "invalid_token", "сессия недействительна или истекла"}},
+	{auth.ErrPasswordUnchanged, apiError{http.StatusBadRequest, "password_unchanged", "новый пароль совпадает с текущим"}},
+	{auth.ErrPasswordChangeRequired, apiError{http.StatusForbidden, "password_change_required", "пароль временный — задайте собственный"}},
+	{auth.ErrNoTemporaryPassword, apiError{http.StatusConflict, "password_not_temporary", "пароль уже не временный — войдите обычным способом"}},
 	{user.ErrTwoFactorState, apiError{http.StatusConflict, "two_factor_state", "двухфакторная аутентификация уже в этом состоянии"}},
 	{user.ErrAccountDeleted, apiError{http.StatusForbidden, "account_deleted", "аккаунт удалён — его ещё можно восстановить"}},
 	{user.ErrRestoreExpired, apiError{http.StatusGone, "restore_expired", "срок восстановления аккаунта истёк"}},

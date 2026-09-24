@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
@@ -22,7 +23,7 @@ func TestMFATokenIsRejectedAsAccessToken(t *testing.T) {
 		t.Fatalf("issue mfa token: %v", err)
 	}
 
-	if _, err := h.tokens.ParseAccessToken(mfaToken); err != user.ErrInvalidToken {
+	if _, err := h.tokens.ParseAccessToken(mfaToken); err != auth.ErrInvalidToken {
 		t.Fatalf("MFA token accepted as access token (err = %v)", err)
 	}
 }
@@ -36,7 +37,7 @@ func TestAccessTokenIsRejectedAsMFAToken(t *testing.T) {
 		t.Fatalf("issue session: %v", err)
 	}
 
-	if _, err := h.tokens.ParseMFAToken(tokens.AccessToken); err != user.ErrInvalidToken {
+	if _, err := h.tokens.ParseMFAToken(tokens.AccessToken); err != auth.ErrInvalidToken {
 		t.Fatalf("access token accepted as MFA token (err = %v)", err)
 	}
 }
@@ -57,8 +58,8 @@ func TestAccessTokenRoundTrip(t *testing.T) {
 	if claims.UserID() != u.ID {
 		t.Errorf("user id = %q, want %q", claims.UserID(), u.ID)
 	}
-	if claims.TokenType != user.TokenTypeAccess {
-		t.Errorf("token type = %q, want %q", claims.TokenType, user.TokenTypeAccess)
+	if claims.TokenType != auth.TokenTypeAccess {
+		t.Errorf("token type = %q, want %q", claims.TokenType, auth.TokenTypeAccess)
 	}
 }
 
@@ -72,7 +73,7 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 		t.Fatalf("issue session: %v", err)
 	}
 
-	if _, err := h.tokens.ParseAccessToken(tokens.AccessToken); err != user.ErrInvalidToken {
+	if _, err := h.tokens.ParseAccessToken(tokens.AccessToken); err != auth.ErrInvalidToken {
 		t.Fatalf("expired token accepted (err = %v)", err)
 	}
 }
@@ -82,8 +83,8 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 func TestUnsignedTokenIsRejected(t *testing.T) {
 	h := newHarness(t)
 
-	claims := &user.Claims{
-		TokenType: user.TokenTypeAccess,
+	claims := &auth.Claims{
+		TokenType: auth.TokenTypeAccess,
 		Role:      user.RoleModerator,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   "user-1",
@@ -96,7 +97,7 @@ func TestUnsignedTokenIsRejected(t *testing.T) {
 		t.Fatalf("sign none: %v", err)
 	}
 
-	if _, err := h.tokens.ParseAccessToken(unsigned); err != user.ErrInvalidToken {
+	if _, err := h.tokens.ParseAccessToken(unsigned); err != auth.ErrInvalidToken {
 		t.Fatalf("alg=none token accepted (err = %v)", err)
 	}
 }
@@ -112,7 +113,7 @@ func TestTokenSignedWithAnotherSecretIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	if _, err := h.tokens.ParseMFAToken(token); err != user.ErrInvalidToken {
+	if _, err := h.tokens.ParseMFAToken(token); err != auth.ErrInvalidToken {
 		t.Fatalf("token signed with a foreign secret accepted (err = %v)", err)
 	}
 }

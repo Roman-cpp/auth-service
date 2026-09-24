@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/platform/auth"
+	authctx "github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/pkg/httputil"
 )
 
@@ -14,7 +14,7 @@ import (
 func RequireRole(role user.Role) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			id, ok := auth.IdentityFrom(r.Context())
+			id, ok := authctx.IdentityFrom(r.Context())
 			if !ok {
 				httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{
 					Code:    "unauthorized",

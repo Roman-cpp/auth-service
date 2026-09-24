@@ -182,7 +182,7 @@ func (r *UserRepository) PurgeDeletedUsers(ctx context.Context, before time.Time
 }
 
 func (r *UserRepository) MarkEmailVerified(ctx context.Context, id user.UserID) error {
-	return r.execExpectingRow(ctx,
+	return execExpectingRow(ctx, r.pool,
 		`UPDATE users SET email_verified_at = NOW(), updated_at = NOW()
 		  WHERE id = $1 AND deleted_at IS NULL AND email_verified_at IS NULL`, id)
 }
@@ -191,7 +191,7 @@ func (r *UserRepository) MarkEmailVerified(ctx context.Context, id user.UserID) 
 // только подтверждённому аккаунту, но решается это в сервисе — здесь важно
 // лишь не воскресить удалённого пользователя.
 func (r *UserRepository) UpdatePassword(ctx context.Context, id user.UserID, passwordHash string) error {
-	return r.execExpectingRow(ctx,
+	return execExpectingRow(ctx, r.pool,
 		`UPDATE users SET password_hash = $2, must_change_password = FALSE, updated_at = NOW()
 		  WHERE id = $1 AND deleted_at IS NULL`, id, passwordHash)
 }
@@ -242,177 +242,9 @@ func (r *UserRepository) PromoteModerators(ctx context.Context, emails []string)
 }
 
 func (r *UserRepository) SetTwoFactorEnabled(ctx context.Context, id user.UserID, enabled bool) error {
-	return r.execExpectingRow(ctx,
+	return execExpectingRow(ctx, r.pool,
 		`UPDATE users SET two_factor_enabled = $2, updated_at = NOW()
 		  WHERE id = $1 AND deleted_at IS NULL AND two_factor_enabled <> $2`, id, enabled)
-}
-
-// ---- отзыв токенов ----
-
-func (r *UserRepository) TokenRevocations(ctx context.Context) (map[user.UserID]int64, error) {
-	rows, err := r.pool.Query(ctx, `SELECT user_id, token_version FROM token_revocations`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	versions := map[user.UserID]int64{}
-	for rows.Next() {
-		var (
-			id  user.UserID
-			ver int64
-		)
-		if err := rows.Scan(&id, &ver); err != nil {
-			return nil, err
-		}
-		versions[id] = ver
-	}
-	return versions, rows.Err()
-}
-
-func (r *UserRepository) DeleteStaleTokenRevocations(ctx context.Context, before time.Time) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM token_revocations WHERE changed_at < $1`, before)
-	return err
-}
-
-// ---- одноразовые коды ----
-
-const authCodeColumns = `id, user_id, purpose, code_hash, attempts, expires_at, consumed_at, created_at`
-
-func scanAuthCode(row rowScanner) (*user.AuthCode, error) {
-	c := &user.AuthCode{}
-	err := row.Scan(
-		&c.ID, &c.UserID, &c.Purpose, &c.CodeHash, &c.Attempts,
-		&c.ExpiresAt, &c.ConsumedAt, &c.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, user.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-// IssueAuthCode гасит предыдущий живой код и вставляет новый одной
-// транзакцией. Двумя отдельными запросами это гонка: параллельный вызов
-// успел бы вставить свой код между ними и упереться в уникальный индекс.
-func (r *UserRepository) IssueAuthCode(
-	ctx context.Context,
-	userID user.UserID,
-	purpose user.CodePurpose,
-	codeHash string,
-	expiresAt time.Time,
-) (*user.AuthCode, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE auth_codes SET consumed_at = NOW()
-		  WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
-		userID, purpose,
-	); err != nil {
-		return nil, err
-	}
-
-	code, err := scanAuthCode(tx.QueryRow(ctx,
-		`INSERT INTO auth_codes (user_id, purpose, code_hash, expires_at)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING `+authCodeColumns,
-		userID, purpose, codeHash, expiresAt,
-	))
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return code, nil
-}
-
-func (r *UserRepository) LatestAuthCode(ctx context.Context, userID user.UserID, purpose user.CodePurpose) (*user.AuthCode, error) {
-	return scanAuthCode(r.pool.QueryRow(ctx,
-		`SELECT `+authCodeColumns+` FROM auth_codes
-		  WHERE user_id = $1 AND purpose = $2
-		  ORDER BY created_at DESC
-		  LIMIT 1`,
-		userID, purpose,
-	))
-}
-
-func (r *UserRepository) IncrementAuthCodeAttempts(ctx context.Context, id string) (int, error) {
-	var attempts int
-	err := r.pool.QueryRow(ctx,
-		`UPDATE auth_codes SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts`, id,
-	).Scan(&attempts)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, user.ErrNotFound
-	}
-	return attempts, err
-}
-
-func (r *UserRepository) ConsumeAuthCode(ctx context.Context, id string) error {
-	return r.execExpectingRow(ctx,
-		`UPDATE auth_codes SET consumed_at = NOW()
-		  WHERE id = $1 AND consumed_at IS NULL`, id)
-}
-
-func (r *UserRepository) DeleteExpiredAuthCodes(ctx context.Context) error {
-	// Погашенные коды тоже не храним вечно: они нужны лишь до конца окна
-	// кулдауна, а это меньше их собственного TTL.
-	_, err := r.pool.Exec(ctx, `DELETE FROM auth_codes WHERE expires_at < NOW()`)
-	return err
-}
-
-// ---- refresh-токены ----
-
-func (r *UserRepository) SaveRefreshToken(ctx context.Context, userID user.UserID, tokenHash string, expiresAt time.Time) error {
-	_, err := r.pool.Exec(ctx,
-		`INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)`,
-		userID, tokenHash, expiresAt,
-	)
-	return err
-}
-
-func (r *UserRepository) GetRefreshToken(ctx context.Context, tokenHash string) (*user.RefreshToken, error) {
-	rt := &user.RefreshToken{}
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, token, expires_at, revoked_at, created_at
-		   FROM refresh_tokens WHERE token = $1`,
-		tokenHash,
-	).Scan(&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ExpiresAt, &rt.RevokedAt, &rt.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, user.ErrNotFound
-	}
-	return rt, err
-}
-
-// RevokeRefreshToken помечает токен использованным. Возвращает ErrNotFound,
-// если токен уже был отозван или не существует — так параллельные refresh
-// с одним токеном не выдадут две пары.
-func (r *UserRepository) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
-	return r.execExpectingRow(ctx,
-		`UPDATE refresh_tokens SET revoked_at = NOW()
-		  WHERE token = $1 AND revoked_at IS NULL`, tokenHash)
-}
-
-func (r *UserRepository) DeleteRefreshToken(ctx context.Context, tokenHash string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM refresh_tokens WHERE token = $1`, tokenHash)
-	return err
-}
-
-func (r *UserRepository) DeleteExpiredRefreshTokens(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM refresh_tokens WHERE expires_at < NOW()`)
-	return err
-}
-
-func (r *UserRepository) DeleteAllRefreshTokens(ctx context.Context, userID user.UserID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM refresh_tokens WHERE user_id = $1`, userID)
-	return err
 }
 
 // ---- helpers ----
@@ -421,8 +253,8 @@ func (r *UserRepository) DeleteAllRefreshTokens(ctx context.Context, userID user
 // Все UPDATE выше несут в WHERE ещё и условие состояния (не удалён, не
 // погашен, не отозван), поэтому ноль строк — это и «нет записи», и «состояние
 // уже изменил кто-то другой»; для вызывающего это одно и то же.
-func (r *UserRepository) execExpectingRow(ctx context.Context, sql string, args ...any) error {
-	tag, err := r.pool.Exec(ctx, sql, args...)
+func execExpectingRow(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) error {
+	tag, err := pool.Exec(ctx, sql, args...)
 	if err != nil {
 		return err
 	}

@@ -10,24 +10,25 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
 // TokenIssuer — единственное место, где выпускаются и разбираются токены.
 type TokenIssuer struct {
-	repo user.Repository
+	repo auth.Repository
 	cfg  config.JWTConfig
 }
 
-func NewTokenIssuer(repo user.Repository, cfg config.JWTConfig) *TokenIssuer {
+func NewTokenIssuer(repo auth.Repository, cfg config.JWTConfig) *TokenIssuer {
 	return &TokenIssuer{repo: repo, cfg: cfg}
 }
 
 // IssueSession выдаёт пару access + refresh. Вызывается только после того,
 // как пройдены ВСЕ факторы: пароль, подтверждённая почта и, если включена,
 // двухфакторная проверка.
-func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*user.TokenResponse, error) {
-	accessToken, expiresAt, err := t.sign(u, user.TokenTypeAccess, t.cfg.AccessTokenTTL)
+func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*auth.TokenResponse, error) {
+	accessToken, expiresAt, err := t.sign(u, auth.TokenTypeAccess, t.cfg.AccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +41,7 @@ func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*user.Tok
 		return nil, err
 	}
 
-	return &user.TokenResponse{
+	return &auth.TokenResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		ExpiresIn:    int64(time.Until(expiresAt).Seconds()),
@@ -51,22 +52,22 @@ func (t *TokenIssuer) IssueSession(ctx context.Context, u *user.User) (*user.Tok
 // Он подтверждает только первый фактор и по типу отличается от access —
 // предъявить его вместо access-токена нельзя.
 func (t *TokenIssuer) IssueMFAToken(u *user.User) (string, error) {
-	token, _, err := t.sign(u, user.TokenTypeMFA, t.cfg.MFATokenTTL)
+	token, _, err := t.sign(u, auth.TokenTypeMFA, t.cfg.MFATokenTTL)
 	return token, err
 }
 
-func (t *TokenIssuer) ParseAccessToken(token string) (*user.Claims, error) {
-	return t.parse(token, user.TokenTypeAccess)
+func (t *TokenIssuer) ParseAccessToken(token string) (*auth.Claims, error) {
+	return t.parse(token, auth.TokenTypeAccess)
 }
 
-func (t *TokenIssuer) ParseMFAToken(token string) (*user.Claims, error) {
-	return t.parse(token, user.TokenTypeMFA)
+func (t *TokenIssuer) ParseMFAToken(token string) (*auth.Claims, error) {
+	return t.parse(token, auth.TokenTypeMFA)
 }
 
-func (t *TokenIssuer) sign(u *user.User, typ user.TokenType, ttl time.Duration) (string, time.Time, error) {
+func (t *TokenIssuer) sign(u *user.User, typ auth.TokenType, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(ttl)
-	claims := &user.Claims{
+	claims := &auth.Claims{
 		TokenType:    typ,
 		TokenVersion: u.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -76,15 +77,15 @@ func (t *TokenIssuer) sign(u *user.User, typ user.TokenType, ttl time.Duration) 
 		},
 	}
 	// Роль — только в access-токене: MFA-токену первого шага она не нужна.
-	if typ == user.TokenTypeAccess {
+	if typ == auth.TokenTypeAccess {
 		claims.Role = u.Role
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(t.cfg.Secret))
 	return signed, expiresAt, err
 }
 
-func (t *TokenIssuer) parse(tokenStr string, want user.TokenType) (*user.Claims, error) {
-	claims := &user.Claims{}
+func (t *TokenIssuer) parse(tokenStr string, want auth.TokenType) (*auth.Claims, error) {
+	claims := &auth.Claims{}
 	token, err := jwt.ParseWithClaims(tokenStr, claims,
 		func(*jwt.Token) (any, error) { return []byte(t.cfg.Secret), nil },
 		// Алгоритм фиксируем списком, а не проверкой внутри keyfunc:
@@ -93,22 +94,22 @@ func (t *TokenIssuer) parse(tokenStr string, want user.TokenType) (*user.Claims,
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil || !token.Valid {
-		return nil, user.ErrInvalidToken
+		return nil, auth.ErrInvalidToken
 	}
 	// Без этой проверки MFA-токен первого шага прошёл бы как access-токен,
 	// то есть второй фактор обходился бы полностью.
 	if claims.TokenType != want {
-		return nil, user.ErrInvalidToken
+		return nil, auth.ErrInvalidToken
 	}
 	if claims.Subject == "" {
-		return nil, user.ErrInvalidToken
+		return nil, auth.ErrInvalidToken
 	}
 	// Access-токены, выданные до появления роли в токене, роли не несут.
 	// Отказ здесь — это 401 и тихий refresh на клиенте, после которого
 	// токен приходит уже с ролью; «пустая роль = обычный пользователь»
 	// на 15 минут лишила бы модератора админки.
-	if want == user.TokenTypeAccess && !claims.Role.Valid() {
-		return nil, user.ErrInvalidToken
+	if want == auth.TokenTypeAccess && !claims.Role.Valid() {
+		return nil, auth.ErrInvalidToken
 	}
 	return claims, nil
 }

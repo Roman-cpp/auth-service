@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/mailer"
 	"golang.org/x/crypto/bcrypt"
@@ -36,12 +37,12 @@ var ErrMailDelivery = errors.New("cannot deliver email")
 // (подтверждение почты, второй фактор входа, включение 2FA) отличаются
 // только значением purpose и текстом письма.
 type CodeService struct {
-	repo   user.Repository
+	repo   auth.Repository
 	mailer *mailer.Mailer
 	cfg    config.CodesConfig
 }
 
-func NewCodeService(repo user.Repository, m *mailer.Mailer, cfg config.CodesConfig) *CodeService {
+func NewCodeService(repo auth.Repository, m *mailer.Mailer, cfg config.CodesConfig) *CodeService {
 	return &CodeService{repo: repo, mailer: m, cfg: cfg}
 }
 
@@ -58,9 +59,9 @@ func NewCodeService(repo user.Repository, m *mailer.Mailer, cfg config.CodesConf
 func (s *CodeService) Issue(
 	ctx context.Context,
 	u *user.User,
-	purpose user.CodePurpose,
+	purpose auth.CodePurpose,
 	tpl mailer.CodeTemplate,
-) (*user.CodeChallenge, error) {
+) (*auth.CodeChallenge, error) {
 	active, err := s.activeWithinCooldown(ctx, u.ID, purpose)
 	if err != nil {
 		return nil, err
@@ -98,7 +99,7 @@ func (s *CodeService) Issue(
 // Verify проверяет код и гасит его. Гасится он и при успехе, и только при
 // успехе: неверная попытка лишь увеличивает счётчик, иначе любой желающий
 // мог бы сжечь чужой код одним неправильным вводом.
-func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose user.CodePurpose, code string) error {
+func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose auth.CodePurpose, code string) error {
 	return s.VerifyThen(ctx, userID, purpose, code, nil)
 }
 
@@ -107,25 +108,25 @@ func (s *CodeService) Verify(ctx context.Context, userID user.UserID, purpose us
 // причине, которую пользователь исправит сам (новый пароль совпал со
 // старым): без неё код сгорал бы, и за исправлением пришлось бы идти
 // с новым письмом. Если check вернул ошибку, код остаётся живым.
-func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpose user.CodePurpose, code string, check func() error) error {
+func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpose auth.CodePurpose, code string, check func() error) error {
 	stored, err := s.repo.LatestAuthCode(ctx, userID, purpose)
 	if errors.Is(err, user.ErrNotFound) {
-		return user.ErrCodeInvalid
+		return auth.ErrCodeInvalid
 	}
 	if err != nil {
 		return err
 	}
 
 	if stored.Consumed() {
-		return user.ErrCodeInvalid
+		return auth.ErrCodeInvalid
 	}
 	if stored.Expired(time.Now()) {
-		return user.ErrCodeExpired
+		return auth.ErrCodeExpired
 	}
 	// Счётчик проверяется до инкремента: иначе попытки продолжали бы
 	// накручиваться после исчерпания лимита и однажды переполнили бы smallint.
 	if stored.Attempts >= s.cfg.MaxAttempts {
-		return user.ErrCodeAttempts
+		return auth.ErrCodeAttempts
 	}
 
 	attempts, err := s.repo.IncrementAuthCodeAttempts(ctx, stored.ID)
@@ -133,11 +134,11 @@ func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpos
 		return err
 	}
 	if attempts > s.cfg.MaxAttempts {
-		return user.ErrCodeAttempts
+		return auth.ErrCodeAttempts
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(stored.CodeHash), []byte(code)); err != nil {
-		return user.ErrCodeInvalid
+		return auth.ErrCodeInvalid
 	}
 
 	if check != nil {
@@ -150,7 +151,7 @@ func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpos
 	// одного кода дадут сессию ровно одной.
 	if err := s.repo.ConsumeAuthCode(ctx, stored.ID); err != nil {
 		if errors.Is(err, user.ErrNotFound) {
-			return user.ErrCodeInvalid
+			return auth.ErrCodeInvalid
 		}
 		return err
 	}
@@ -160,12 +161,12 @@ func (s *CodeService) VerifyThen(ctx context.Context, userID user.UserID, purpos
 // Challenge собирает ответ для клиента, не выпуская код. Нужен там, где
 // нельзя раскрывать существование аккаунта: клиент получает те же сроки,
 // что и при реальной отправке.
-func (s *CodeService) Challenge(now time.Time) *user.CodeChallenge {
+func (s *CodeService) Challenge(now time.Time) *auth.CodeChallenge {
 	return s.challenge(now, now.Add(s.cfg.TTL))
 }
 
-func (s *CodeService) challenge(issuedAt, expiresAt time.Time) *user.CodeChallenge {
-	return &user.CodeChallenge{
+func (s *CodeService) challenge(issuedAt, expiresAt time.Time) *auth.CodeChallenge {
+	return &auth.CodeChallenge{
 		ExpiresAt:     expiresAt,
 		ResendAfterAt: issuedAt.Add(s.cfg.ResendCooldown),
 	}
@@ -177,7 +178,7 @@ func (s *CodeService) challenge(issuedAt, expiresAt time.Time) *user.CodeChallen
 //
 // Ограничение живёт здесь, а не в httprate: тот умеет ключевать только по IP
 // и заголовкам, а письма на один ящик заказывают с разных адресов.
-func (s *CodeService) activeWithinCooldown(ctx context.Context, userID user.UserID, purpose user.CodePurpose) (*user.AuthCode, error) {
+func (s *CodeService) activeWithinCooldown(ctx context.Context, userID user.UserID, purpose auth.CodePurpose) (*auth.AuthCode, error) {
 	last, err := s.repo.LatestAuthCode(ctx, userID, purpose)
 	if errors.Is(err, user.ErrNotFound) {
 		return nil, nil

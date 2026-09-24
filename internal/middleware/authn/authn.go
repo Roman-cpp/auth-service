@@ -5,8 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/platform/auth"
+	authctx "github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/pkg/httputil"
 )
 
@@ -14,7 +15,7 @@ import (
 // сервиса. Зависимость на интерфейсы, а не на конкретные типы: так middleware
 // тестируется без базы и не тянет за собой половину приложения.
 type TokenValidator interface {
-	ValidateAccessToken(token string) (*user.Claims, error)
+	ValidateAccessToken(token string) (*auth.Claims, error)
 }
 
 type RevocationChecker interface {
@@ -44,7 +45,7 @@ func JWTAuth(v TokenValidator, revocations RevocationChecker, log *slog.Logger) 
 			}
 
 			switch err := revocations.Check(claims.UserID(), claims.TokenVersion); {
-			case errors.Is(err, user.ErrInvalidToken):
+			case errors.Is(err, auth.ErrInvalidToken):
 				// Отозван. 401, а не 403: клиент сделает refresh и получит
 				// токен с актуальной ролью — или отказ, если аккаунта нет.
 				unauthorized(w, "сессия недействительна или истекла")
@@ -58,7 +59,7 @@ func JWTAuth(v TokenValidator, revocations RevocationChecker, log *slog.Logger) 
 				return
 			}
 
-			ctx := auth.WithIdentity(r.Context(), auth.Identity{
+			ctx := authctx.WithIdentity(r.Context(), authctx.Identity{
 				UserID: claims.UserID(),
 				Role:   string(claims.Role),
 			})

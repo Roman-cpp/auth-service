@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
 // accessClaims выдаёт сессию и разбирает её access-токен — так проверяется
 // ровно то, что потом увидит authn.
-func (h *harness) accessClaims(t *testing.T, u *user.User) *user.Claims {
+func (h *harness) accessClaims(t *testing.T, u *user.User) *auth.Claims {
 	t.Helper()
 	tokens, err := h.tokens.IssueSession(t.Context(), u)
 	if err != nil {
@@ -24,7 +25,7 @@ func (h *harness) accessClaims(t *testing.T, u *user.User) *user.Claims {
 	return claims
 }
 
-func (h *harness) checkToken(c *user.Claims) error {
+func (h *harness) checkToken(c *auth.Claims) error {
 	return h.revoked.Check(c.UserID(), c.TokenVersion)
 }
 
@@ -51,14 +52,14 @@ func TestPasswordChangeRevokesAccessTokens(t *testing.T) {
 	u := h.registerVerified(t, "revoke-pw@example.com")
 	old := h.accessClaims(t, u)
 
-	result, err := h.auth.ChangePassword(t.Context(), u.ID, &user.ChangePassword{
+	result, err := h.auth.ChangePassword(t.Context(), u.ID, &auth.ChangePassword{
 		CurrentPassword: testPassword, NewPassword: "brand-new-password",
 	})
 	if err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 
-	if err := h.checkToken(old); !errors.Is(err, user.ErrInvalidToken) {
+	if err := h.checkToken(old); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Errorf("old access token after password change: got %v, want ErrInvalidToken", err)
 	}
 	fresh, err := h.tokens.ParseAccessToken(result.Tokens.AccessToken)
@@ -84,7 +85,7 @@ func TestRoleChangeRevokesAccessTokens(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 
-	if err := h.checkToken(old); !errors.Is(err, user.ErrInvalidToken) {
+	if err := h.checkToken(old); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Errorf("token with the old role: got %v, want ErrInvalidToken", err)
 	}
 
@@ -101,7 +102,7 @@ func TestAccountDeletionRevokesAccessTokens(t *testing.T) {
 
 	h.deleteAccount(t, u.ID)
 
-	if err := h.checkToken(old); !errors.Is(err, user.ErrInvalidToken) {
+	if err := h.checkToken(old); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Errorf("token of a deleted account: got %v, want ErrInvalidToken", err)
 	}
 }
@@ -115,7 +116,7 @@ func TestStaleRevocationListFailsClosed(t *testing.T) {
 
 	h.revoked.now = func() time.Time { return time.Now().Add(revocationMaxStaleness + time.Second) }
 
-	if err := h.checkToken(c); !errors.Is(err, user.ErrRevocationsStale) {
+	if err := h.checkToken(c); !errors.Is(err, auth.ErrRevocationsStale) {
 		t.Errorf("got %v, want ErrRevocationsStale", err)
 	}
 }
@@ -125,8 +126,8 @@ func TestStaleRevocationListFailsClosed(t *testing.T) {
 func TestAccessTokenWithoutRoleIsRejected(t *testing.T) {
 	h := newHarness(t)
 
-	legacy := &user.Claims{
-		TokenType: user.TokenTypeAccess,
+	legacy := &auth.Claims{
+		TokenType: auth.TokenTypeAccess,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   "user-1",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
@@ -136,7 +137,7 @@ func TestAccessTokenWithoutRoleIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	if _, err := h.tokens.ParseAccessToken(signed); !errors.Is(err, user.ErrInvalidToken) {
+	if _, err := h.tokens.ParseAccessToken(signed); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("role-less access token accepted (err = %v)", err)
 	}
 }
@@ -148,7 +149,7 @@ func TestMFATokenInvalidatedByPasswordChange(t *testing.T) {
 	u := h.registerVerified(t, "mfa-pw@example.com")
 	enableTwoFactor(t, h, u)
 
-	login, err := h.auth.Login(t.Context(), &user.Login{Email: u.Email, Password: testPassword})
+	login, err := h.auth.Login(t.Context(), &auth.Login{Email: u.Email, Password: testPassword})
 	if err != nil || !login.MFARequired() {
 		t.Fatalf("login: %v, mfa=%v", err, login != nil && login.MFARequired())
 	}
@@ -159,7 +160,7 @@ func TestMFATokenInvalidatedByPasswordChange(t *testing.T) {
 		t.Fatalf("replace password: %v", err)
 	}
 
-	if _, err := h.auth.VerifyMFA(t.Context(), login.MFAToken, code); !errors.Is(err, user.ErrInvalidToken) {
+	if _, err := h.auth.VerifyMFA(t.Context(), login.MFAToken, code); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("MFA after password change: got %v, want ErrInvalidToken", err)
 	}
 }

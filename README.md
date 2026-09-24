@@ -332,11 +332,17 @@ cmd/
   migrate/        — CLI для управления миграциями
 internal/
   config/         — загрузка конфигурации из env
-  domain/         — бизнес-логика (DDD-агрегаты)
+  domain/
+    user/         — пользователь как ресурс: сущность, роли, представления, хранилище
+    auth/         — вход и сессии: токены, одноразовые коды, сценарии, их хранилище
   handler/        — HTTP-обработчики
   mailer/         — отправка писем (SMTP + шаблоны)
-  middleware/     — JWT и прочие middleware
-  repository/     — реализации репозиториев (PostgreSQL)
+  middleware/
+    authn/        — проверка access-токена
+    authz/        — проверка роли
+  platform/
+    auth/         — личность вошедшего пользователя в контексте запроса
+  repository/     — PostgreSQL: UserRepository (user) и AuthRepository (auth)
   router/         — маршрутизация
   service/        — токены, одноразовые коды, сценарии входа
 migrations/       — SQL-миграции

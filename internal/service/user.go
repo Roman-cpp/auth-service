@@ -6,17 +6,24 @@ import (
 	"time"
 
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
 type UserService struct {
 	repo        user.Repository
+	sessions    auth.Repository
 	revocations RevocationSyncer
 	cfg         config.AccountConfig
 }
 
-func NewUserService(repo user.Repository, revocations RevocationSyncer, cfg config.AccountConfig) *UserService {
-	return &UserService{repo: repo, revocations: revocations, cfg: cfg}
+func NewUserService(
+	repo user.Repository,
+	sessions auth.Repository,
+	revocations RevocationSyncer,
+	cfg config.AccountConfig,
+) *UserService {
+	return &UserService{repo: repo, sessions: sessions, revocations: revocations, cfg: cfg}
 }
 
 func (s *UserService) GetByID(ctx context.Context, id user.UserID) (*user.User, error) {
@@ -37,7 +44,7 @@ func (s *UserService) DeleteUser(ctx context.Context, id user.UserID) (time.Time
 	}
 
 	// Удалённый пользователь не должен продолжать сессию через refresh.
-	if err := s.repo.DeleteAllRefreshTokens(ctx, id); err != nil {
+	if err := s.sessions.DeleteAllRefreshTokens(ctx, id); err != nil {
 		return time.Time{}, err
 	}
 	// Access-токены удаление отозвало в базе (подняло их версию); здесь —

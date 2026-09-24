@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
@@ -29,7 +30,7 @@ const (
 // access-токена), поэтому синхронизация — полная перезагрузка, а не выборка
 // изменений: так не теряются транзакции, закоммиченные позже своего NOW().
 type RevocationList struct {
-	repo user.Repository
+	repo auth.Repository
 	now  func() time.Time
 
 	mu       sync.RWMutex
@@ -37,7 +38,7 @@ type RevocationList struct {
 	syncedAt time.Time
 }
 
-func NewRevocationList(repo user.Repository) *RevocationList {
+func NewRevocationList(repo auth.Repository) *RevocationList {
 	return &RevocationList{repo: repo, now: time.Now, versions: map[user.UserID]int64{}}
 }
 
@@ -64,10 +65,10 @@ func (l *RevocationList) Check(id user.UserID, version int64) error {
 	defer l.mu.RUnlock()
 
 	if l.now().Sub(l.syncedAt) > revocationMaxStaleness {
-		return user.ErrRevocationsStale
+		return auth.ErrRevocationsStale
 	}
 	if current, ok := l.versions[id]; ok && version < current {
-		return user.ErrInvalidToken
+		return auth.ErrInvalidToken
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/platform/auth"
+	authctx "github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/internal/service"
 )
 
@@ -26,7 +26,7 @@ func NewUserHandler(svc *service.UserService, cfg *config.Config, log *slog.Logg
 // задача будущего /admin API.
 func requireSelf(w http.ResponseWriter, r *http.Request) (user.UserID, bool) {
 	id := chi.URLParam(r, "id")
-	authID, ok := auth.UserIDFrom(r.Context())
+	authID, ok := authctx.UserIDFrom(r.Context())
 	if !ok || authID != id {
 		writeError(w, apiError{http.StatusForbidden, "forbidden", "доступ запрещён"})
 		return "", false

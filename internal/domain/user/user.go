@@ -1,10 +1,9 @@
+// Package user — пользователь как ресурс: сама сущность, её представления
+// для API и админки, хранилище. Всё, что относится ко входу и сессиям
+// (токены, одноразовые коды, сценарии аутентификации), — в пакете auth.
 package user
 
-import (
-	"time"
-
-	"github.com/golang-jwt/jwt/v5"
-)
+import "time"
 
 type UserID = string
 
@@ -38,7 +37,8 @@ type User struct {
 	// CreatedBy — модератор, заведший аккаунт; nil — зарегистрировался сам.
 	CreatedBy *UserID
 	// TokenVersion поднимает база (триггер) при смене роли, пароля и
-	// удалении. Токены с версией ниже текущей считаются отозванными.
+	// удалении. Токены с версией ниже текущей считаются отозванными
+	// (см. пакет auth).
 	TokenVersion int64
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -91,71 +91,4 @@ func NewAdminUserView(u *User) *AdminUserView {
 		MustChangePassword: u.MustChangePassword,
 		CreatedBy:          u.CreatedBy,
 	}
-}
-
-type RefreshToken struct {
-	ID        string
-	UserID    UserID
-	TokenHash string
-	ExpiresAt time.Time
-	RevokedAt *time.Time
-	CreatedAt time.Time
-}
-
-// TokenType различает access-токен и промежуточный токен второго фактора.
-// Оба подписаны одним секретом, поэтому без явного типа MFA-токен первого
-// шага прошёл бы проверку как полноценный access — то есть второй фактор
-// обходился бы предъявлением токена, выданного до его ввода.
-type TokenType string
-
-const (
-	TokenTypeAccess TokenType = "access"
-	TokenTypeMFA    TokenType = "mfa"
-)
-
-// Claims — содержимое JWT. Идентификатор пользователя — стандартный sub.
-// Почты и прочих персональных данных здесь нет: payload подписан, но не
-// зашифрован, и прочитать его может любой, у кого оказался токен.
-type Claims struct {
-	TokenType TokenType `json:"typ"`
-	// Role есть только в access-токене. Держать её в токене безопасно,
-	// потому что смена роли поднимает TokenVersion и старые токены отзываются.
-	Role Role `json:"role,omitempty"`
-	// TokenVersion — версия токенов пользователя на момент выдачи.
-	TokenVersion int64 `json:"ver"`
-	jwt.RegisteredClaims
-}
-
-func (c *Claims) UserID() UserID {
-	return c.Subject
-}
-
-// CodePurpose разделяет одноразовые коды по назначению: код подтверждения
-// почты нельзя предъявить как второй фактор входа и наоборот.
-type CodePurpose string
-
-const (
-	CodePurposeEmailVerify   CodePurpose = "email_verify"
-	CodePurposeMFALogin      CodePurpose = "mfa_login"
-	CodePurposeMFAEnable     CodePurpose = "mfa_enable"
-	CodePurposePasswordReset CodePurpose = "password_reset"
-)
-
-type AuthCode struct {
-	ID         string
-	UserID     UserID
-	Purpose    CodePurpose
-	CodeHash   string
-	Attempts   int
-	ExpiresAt  time.Time
-	ConsumedAt *time.Time
-	CreatedAt  time.Time
-}
-
-func (c *AuthCode) Consumed() bool {
-	return c.ConsumedAt != nil
-}
-
-func (c *AuthCode) Expired(now time.Time) bool {
-	return now.After(c.ExpiresAt)
 }

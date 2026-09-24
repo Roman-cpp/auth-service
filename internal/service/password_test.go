@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/domain/auth"
 )
 
 const newPassword = "another-correct-horse"
@@ -19,10 +19,10 @@ func requestReset(t *testing.T, h *harness, email string) string {
 	return h.mails.last(t).code
 }
 
-func login(t *testing.T, h *harness, email, password string) *user.LoginResult {
+func login(t *testing.T, h *harness, email, password string) *auth.LoginResult {
 	t.Helper()
 
-	res, err := h.auth.Login(t.Context(), &user.Login{Email: email, Password: password})
+	res, err := h.auth.Login(t.Context(), &auth.Login{Email: email, Password: password})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -36,22 +36,22 @@ func TestResetPasswordReplacesPassword(t *testing.T) {
 	h.registerVerified(t, "reset-ok@example.com")
 	code := requestReset(t, h, "reset-ok@example.com")
 
-	if err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	if err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-ok@example.com", Code: code, Password: newPassword,
 	}); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
 
-	if _, err := h.auth.Login(t.Context(), &user.Login{
+	if _, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "reset-ok@example.com", Password: newPassword,
 	}); err != nil {
 		t.Fatalf("login with the new password: %v", err)
 	}
 
-	_, err := h.auth.Login(t.Context(), &user.Login{
+	_, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "reset-ok@example.com", Password: testPassword,
 	})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("login with the old password: got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -64,14 +64,14 @@ func TestResetPasswordRevokesExistingSessions(t *testing.T) {
 	session := login(t, h, "reset-sessions@example.com", testPassword)
 
 	code := requestReset(t, h, "reset-sessions@example.com")
-	if err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	if err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-sessions@example.com", Code: code, Password: newPassword,
 	}); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
 
 	_, err := h.auth.Refresh(t.Context(), session.Tokens.RefreshToken)
-	if !errors.Is(err, user.ErrInvalidToken) {
+	if !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("refresh with the pre-reset token: got %v, want ErrInvalidToken", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestResetPasswordDoesNotBypassTwoFactor(t *testing.T) {
 	enableTwoFactor(t, h, u)
 
 	code := requestReset(t, h, "reset-2fa@example.com")
-	if err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	if err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-2fa@example.com", Code: code, Password: newPassword,
 	}); err != nil {
 		t.Fatalf("reset: %v", err)
@@ -101,15 +101,15 @@ func TestResetPasswordRejectsWrongCode(t *testing.T) {
 	h.registerVerified(t, "reset-wrong@example.com")
 	requestReset(t, h, "reset-wrong@example.com")
 
-	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-wrong@example.com", Code: "000000", Password: newPassword,
 	})
-	if !errors.Is(err, user.ErrCodeInvalid) {
+	if !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("got %v, want ErrCodeInvalid", err)
 	}
 
 	// Пароль обязан остаться прежним.
-	if _, err := h.auth.Login(t.Context(), &user.Login{
+	if _, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "reset-wrong@example.com", Password: testPassword,
 	}); err != nil {
 		t.Fatalf("login with the old password: %v", err)
@@ -121,16 +121,16 @@ func TestResetCodeIsSingleUse(t *testing.T) {
 	h.registerVerified(t, "reset-once@example.com")
 	code := requestReset(t, h, "reset-once@example.com")
 
-	if err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	if err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-once@example.com", Code: code, Password: newPassword,
 	}); err != nil {
 		t.Fatalf("first reset: %v", err)
 	}
 
-	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-once@example.com", Code: code, Password: "third-password-here",
 	})
-	if !errors.Is(err, user.ErrCodeInvalid) {
+	if !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("second reset: got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -146,10 +146,10 @@ func TestResetPasswordRejectsCodeIssuedForAnotherPurpose(t *testing.T) {
 	}
 	foreign := h.mails.last(t).code
 
-	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-purpose@example.com", Code: foreign, Password: newPassword,
 	})
-	if !errors.Is(err, user.ErrCodeInvalid) {
+	if !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -184,10 +184,10 @@ func TestForgotPasswordIgnoresUnverifiedAccounts(t *testing.T) {
 	}
 
 	// И код, разумеется, не принимается.
-	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-unverified@example.com", Code: h.mails.last(t).code, Password: newPassword,
 	})
-	if !errors.Is(err, user.ErrCodeInvalid) {
+	if !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -197,10 +197,10 @@ func TestResetPasswordRejectsCurrentPassword(t *testing.T) {
 	h.registerVerified(t, "reset-same@example.com")
 	code := requestReset(t, h, "reset-same@example.com")
 
-	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-same@example.com", Code: code, Password: testPassword,
 	})
-	if !errors.Is(err, user.ErrPasswordUnchanged) {
+	if !errors.Is(err, auth.ErrPasswordUnchanged) {
 		t.Fatalf("got %v, want ErrPasswordUnchanged", err)
 	}
 }
@@ -212,14 +212,14 @@ func TestResetPasswordKeepsCodeAfterUnchangedPassword(t *testing.T) {
 	h.registerVerified(t, "reset-retry@example.com")
 	code := requestReset(t, h, "reset-retry@example.com")
 
-	err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-retry@example.com", Code: code, Password: testPassword,
 	})
-	if !errors.Is(err, user.ErrPasswordUnchanged) {
+	if !errors.Is(err, auth.ErrPasswordUnchanged) {
 		t.Fatalf("same password: got %v, want ErrPasswordUnchanged", err)
 	}
 
-	if err := h.auth.ResetPassword(t.Context(), &user.ResetPassword{
+	if err := h.auth.ResetPassword(t.Context(), &auth.ResetPassword{
 		Email: "reset-retry@example.com", Code: code, Password: newPassword,
 	}); err != nil {
 		t.Fatalf("retry with the same code: %v", err)
@@ -233,7 +233,7 @@ func TestChangePasswordReplacesPassword(t *testing.T) {
 	h := newHarness(t)
 	u := h.registerVerified(t, "change-ok@example.com")
 
-	res, err := h.auth.ChangePassword(t.Context(), u.ID, &user.ChangePassword{
+	res, err := h.auth.ChangePassword(t.Context(), u.ID, &auth.ChangePassword{
 		CurrentPassword: testPassword, NewPassword: newPassword,
 	})
 	if err != nil {
@@ -243,14 +243,14 @@ func TestChangePasswordReplacesPassword(t *testing.T) {
 		t.Fatal("expected a fresh token pair for the caller")
 	}
 
-	if _, err := h.auth.Login(t.Context(), &user.Login{
+	if _, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "change-ok@example.com", Password: newPassword,
 	}); err != nil {
 		t.Fatalf("login with the new password: %v", err)
 	}
-	if _, err := h.auth.Login(t.Context(), &user.Login{
+	if _, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "change-ok@example.com", Password: testPassword,
-	}); !errors.Is(err, user.ErrInvalidCredentials) {
+	}); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("login with the old password: got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -260,10 +260,10 @@ func TestChangePasswordRequiresCurrentPassword(t *testing.T) {
 	h := newHarness(t)
 	u := h.registerVerified(t, "change-pwd@example.com")
 
-	_, err := h.auth.ChangePassword(t.Context(), u.ID, &user.ChangePassword{
+	_, err := h.auth.ChangePassword(t.Context(), u.ID, &auth.ChangePassword{
 		CurrentPassword: "wrong-password", NewPassword: newPassword,
 	})
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -275,14 +275,14 @@ func TestChangePasswordRevokesOtherSessions(t *testing.T) {
 	u := h.registerVerified(t, "change-sessions@example.com")
 	other := login(t, h, "change-sessions@example.com", testPassword)
 
-	res, err := h.auth.ChangePassword(t.Context(), u.ID, &user.ChangePassword{
+	res, err := h.auth.ChangePassword(t.Context(), u.ID, &auth.ChangePassword{
 		CurrentPassword: testPassword, NewPassword: newPassword,
 	})
 	if err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 
-	if _, err := h.auth.Refresh(t.Context(), other.Tokens.RefreshToken); !errors.Is(err, user.ErrInvalidToken) {
+	if _, err := h.auth.Refresh(t.Context(), other.Tokens.RefreshToken); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("other device: got %v, want ErrInvalidToken", err)
 	}
 	if _, err := h.auth.Refresh(t.Context(), res.Tokens.RefreshToken); err != nil {
@@ -294,15 +294,15 @@ func TestChangePasswordRejectsSamePassword(t *testing.T) {
 	h := newHarness(t)
 	u := h.registerVerified(t, "change-same@example.com")
 
-	_, err := h.auth.ChangePassword(t.Context(), u.ID, &user.ChangePassword{
+	_, err := h.auth.ChangePassword(t.Context(), u.ID, &auth.ChangePassword{
 		CurrentPassword: testPassword, NewPassword: testPassword,
 	})
-	if !errors.Is(err, user.ErrPasswordUnchanged) {
+	if !errors.Is(err, auth.ErrPasswordUnchanged) {
 		t.Fatalf("got %v, want ErrPasswordUnchanged", err)
 	}
 
 	// Сессии при отказе трогать нельзя.
-	if _, err := h.auth.Login(t.Context(), &user.Login{
+	if _, err := h.auth.Login(t.Context(), &auth.Login{
 		Email: "change-same@example.com", Password: testPassword,
 	}); err != nil {
 		t.Fatalf("login after a rejected change: %v", err)

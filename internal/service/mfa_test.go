@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 )
 
@@ -25,7 +26,7 @@ func TestEnableTwoFactorRequiresPassword(t *testing.T) {
 	u := h.registerVerified(t, "enable-pwd@example.com")
 
 	_, err := h.auth.StartEnableTwoFactor(t.Context(), u.ID, "wrong-password")
-	if !errors.Is(err, user.ErrInvalidCredentials) {
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -40,7 +41,7 @@ func TestEnableTwoFactorRequiresEmailedCode(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	if _, err := h.auth.ConfirmEnableTwoFactor(t.Context(), u.ID, "000000"); !errors.Is(err, user.ErrCodeInvalid) {
+	if _, err := h.auth.ConfirmEnableTwoFactor(t.Context(), u.ID, "000000"); !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("confirm with wrong code: got %v, want ErrCodeInvalid", err)
 	}
 
@@ -58,7 +59,7 @@ func TestLoginWithTwoFactorRequiresSecondStep(t *testing.T) {
 	u := h.registerVerified(t, "2fa-login@example.com")
 	enableTwoFactor(t, h, u)
 
-	res, err := h.auth.Login(t.Context(), &user.Login{Email: "2fa-login@example.com", Password: testPassword})
+	res, err := h.auth.Login(t.Context(), &auth.Login{Email: "2fa-login@example.com", Password: testPassword})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -87,12 +88,12 @@ func TestVerifyMFARejectsWrongCode(t *testing.T) {
 	u := h.registerVerified(t, "2fa-wrong@example.com")
 	enableTwoFactor(t, h, u)
 
-	res, err := h.auth.Login(t.Context(), &user.Login{Email: "2fa-wrong@example.com", Password: testPassword})
+	res, err := h.auth.Login(t.Context(), &auth.Login{Email: "2fa-wrong@example.com", Password: testPassword})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
 
-	if _, err := h.auth.VerifyMFA(t.Context(), res.MFAToken, "000000"); !errors.Is(err, user.ErrCodeInvalid) {
+	if _, err := h.auth.VerifyMFA(t.Context(), res.MFAToken, "000000"); !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -100,7 +101,7 @@ func TestVerifyMFARejectsWrongCode(t *testing.T) {
 func TestVerifyMFARejectsGarbageToken(t *testing.T) {
 	h := newHarness(t)
 
-	if _, err := h.auth.VerifyMFA(t.Context(), "not-a-token", "123456"); !errors.Is(err, user.ErrInvalidToken) {
+	if _, err := h.auth.VerifyMFA(t.Context(), "not-a-token", "123456"); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("got %v, want ErrInvalidToken", err)
 	}
 }
@@ -112,7 +113,7 @@ func TestMFATokenCannotBeReplayed(t *testing.T) {
 	u := h.registerVerified(t, "2fa-replay@example.com")
 	enableTwoFactor(t, h, u)
 
-	res, err := h.auth.Login(t.Context(), &user.Login{Email: "2fa-replay@example.com", Password: testPassword})
+	res, err := h.auth.Login(t.Context(), &auth.Login{Email: "2fa-replay@example.com", Password: testPassword})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestMFATokenCannotBeReplayed(t *testing.T) {
 	if _, err := h.auth.VerifyMFA(t.Context(), res.MFAToken, code); err != nil {
 		t.Fatalf("first verify: %v", err)
 	}
-	if _, err := h.auth.VerifyMFA(t.Context(), res.MFAToken, code); !errors.Is(err, user.ErrCodeInvalid) {
+	if _, err := h.auth.VerifyMFA(t.Context(), res.MFAToken, code); !errors.Is(err, auth.ErrCodeInvalid) {
 		t.Fatalf("replay: got %v, want ErrCodeInvalid", err)
 	}
 }
@@ -131,11 +132,11 @@ func TestResendMFAIssuesUsableCode(t *testing.T) {
 	u := h.registerVerified(t, "2fa-resend@example.com")
 	enableTwoFactor(t, h, u)
 
-	res, err := h.auth.Login(t.Context(), &user.Login{Email: "2fa-resend@example.com", Password: testPassword})
+	res, err := h.auth.Login(t.Context(), &auth.Login{Email: "2fa-resend@example.com", Password: testPassword})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	h.passCooldown(t, u.ID, user.CodePurposeMFALogin)
+	h.passCooldown(t, u.ID, auth.CodePurposeMFALogin)
 
 	refreshed, challenge, err := h.auth.ResendMFACode(t.Context(), res.MFAToken)
 	if err != nil {
@@ -155,7 +156,7 @@ func TestDisableTwoFactorRequiresPassword(t *testing.T) {
 	u := h.registerVerified(t, "2fa-disable-pwd@example.com")
 	enableTwoFactor(t, h, u)
 
-	if _, err := h.auth.DisableTwoFactor(t.Context(), u.ID, "wrong-password"); !errors.Is(err, user.ErrInvalidCredentials) {
+	if _, err := h.auth.DisableTwoFactor(t.Context(), u.ID, "wrong-password"); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("got %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -173,7 +174,7 @@ func TestDisableTwoFactorRestoresSingleStepLogin(t *testing.T) {
 		t.Fatal("preview still reports two-factor as enabled")
 	}
 
-	res, err := h.auth.Login(t.Context(), &user.Login{Email: "2fa-disable@example.com", Password: testPassword})
+	res, err := h.auth.Login(t.Context(), &auth.Login{Email: "2fa-disable@example.com", Password: testPassword})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

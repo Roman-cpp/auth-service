@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/mailer"
 	"golang.org/x/crypto/bcrypt"
@@ -32,6 +33,7 @@ var dummyPasswordHash = sync.OnceValue(func() []byte {
 
 type AuthService struct {
 	repo        user.Repository
+	sessions    auth.Repository
 	tokens      *TokenIssuer
 	codes       *CodeService
 	revocations RevocationSyncer
@@ -47,12 +49,13 @@ type RevocationSyncer interface {
 
 func NewAuthService(
 	repo user.Repository,
+	sessions auth.Repository,
 	tokens *TokenIssuer,
 	codes *CodeService,
 	revocations RevocationSyncer,
 	account config.AccountConfig,
 ) *AuthService {
-	return &AuthService{repo: repo, tokens: tokens, codes: codes, revocations: revocations, account: account}
+	return &AuthService{repo: repo, sessions: sessions, tokens: tokens, codes: codes, revocations: revocations, account: account}
 }
 
 // ---- регистрация и подтверждение почты ----
@@ -60,7 +63,7 @@ func NewAuthService(
 // Register заводит пользователя без права входа и отправляет код на почту.
 // Сессия здесь не выдаётся: до подтверждения адреса аккаунтом пользоваться
 // нельзя.
-func (s *AuthService) Register(ctx context.Context, req *user.Register) (*user.RegisterResult, error) {
+func (s *AuthService) Register(ctx context.Context, req *auth.Register) (*auth.RegisterResult, error) {
 	hash, err := hashPassword(req.Password)
 	if err != nil {
 		return nil, err
@@ -77,18 +80,18 @@ func (s *AuthService) Register(ctx context.Context, req *user.Register) (*user.R
 		return nil, err
 	}
 
-	challenge, err := s.codes.Issue(ctx, u, user.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
+	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &user.RegisterResult{User: user.NewUserPreview(u), Challenge: challenge}, nil
+	return &auth.RegisterResult{User: user.NewUserPreview(u), Challenge: challenge}, nil
 }
 
 // ResendEmailVerification никогда не сообщает, есть ли такой аккаунт: для
 // неизвестного и уже подтверждённого адреса возвращается такой же ответ,
 // просто без письма.
-func (s *AuthService) ResendEmailVerification(ctx context.Context, email string) (*user.CodeChallenge, error) {
+func (s *AuthService) ResendEmailVerification(ctx context.Context, email string) (*auth.CodeChallenge, error) {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(email))
 	if errors.Is(err, user.ErrNotFound) {
 		return s.codes.Challenge(time.Now()), nil
@@ -100,26 +103,26 @@ func (s *AuthService) ResendEmailVerification(ctx context.Context, email string)
 		return s.codes.Challenge(time.Now()), nil
 	}
 
-	return s.codes.Issue(ctx, u, user.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
+	return s.codes.Issue(ctx, u, auth.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
 }
 
 // VerifyEmail подтверждает адрес и сразу открывает сессию — заставлять
 // пользователя тут же логиниться ещё раз незачем, оба фактора уже предъявлены.
-func (s *AuthService) VerifyEmail(ctx context.Context, req *user.VerifyCode) (*user.SessionResult, error) {
+func (s *AuthService) VerifyEmail(ctx context.Context, req *auth.VerifyCode) (*auth.SessionResult, error) {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
 	if errors.Is(err, user.ErrNotFound) {
 		// Тот же ответ, что и на неверный код: иначе эндпоинт становится
 		// способом проверять, зарегистрирован ли адрес.
-		return nil, user.ErrCodeInvalid
+		return nil, auth.ErrCodeInvalid
 	}
 	if err != nil {
 		return nil, err
 	}
 	if u.EmailVerified() {
-		return nil, user.ErrEmailVerified
+		return nil, auth.ErrEmailVerified
 	}
 
-	if err := s.codes.Verify(ctx, u.ID, user.CodePurposeEmailVerify, req.Code); err != nil {
+	if err := s.codes.Verify(ctx, u.ID, auth.CodePurposeEmailVerify, req.Code); err != nil {
 		return nil, err
 	}
 	if err := s.repo.MarkEmailVerified(ctx, u.ID); err != nil {
@@ -134,7 +137,7 @@ func (s *AuthService) VerifyEmail(ctx context.Context, req *user.VerifyCode) (*u
 
 // Login проверяет первый фактор. Если у аккаунта включён второй, сессия не
 // выдаётся: клиент получает MFA-токен и код на почту.
-func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.LoginResult, error) {
+func (s *AuthService) Login(ctx context.Context, req *auth.Login) (*auth.LoginResult, error) {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
 	if errors.Is(err, user.ErrNotFound) {
 		// Живого аккаунта нет — но, возможно, есть удалённый и ещё
@@ -147,18 +150,18 @@ func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.LoginRe
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
-		return nil, user.ErrInvalidCredentials
+		return nil, auth.ErrInvalidCredentials
 	}
 
 	// Проверяется после пароля: иначе по ответу можно было бы узнать, что
 	// адрес зарегистрирован, не зная пароля.
 	if !u.EmailVerified() {
-		return nil, user.ErrEmailNotVerified
+		return nil, auth.ErrEmailNotVerified
 	}
 	// Тоже после пароля, по той же причине. Временный пароль видел модератор,
 	// поэтому сессию по нему не выдаём: сначала владелец задаёт свой.
 	if u.MustChangePassword {
-		return nil, user.ErrPasswordChangeRequired
+		return nil, auth.ErrPasswordChangeRequired
 	}
 
 	return s.completeLogin(ctx, u)
@@ -166,16 +169,16 @@ func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.LoginRe
 
 // completeLogin — вход после проверки пароля: сессия сразу или, если включён
 // второй фактор, MFA-токен и код на почту.
-func (s *AuthService) completeLogin(ctx context.Context, u *user.User) (*user.LoginResult, error) {
+func (s *AuthService) completeLogin(ctx context.Context, u *user.User) (*auth.LoginResult, error) {
 	if !u.TwoFactorEnabled {
 		tokens, err := s.tokens.IssueSession(ctx, u)
 		if err != nil {
 			return nil, err
 		}
-		return &user.LoginResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
+		return &auth.LoginResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
 	}
 
-	challenge, err := s.codes.Issue(ctx, u, user.CodePurposeMFALogin, mailer.TemplateLoginCode)
+	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeMFALogin, mailer.TemplateLoginCode)
 	if err != nil {
 		return nil, err
 	}
@@ -184,15 +187,15 @@ func (s *AuthService) completeLogin(ctx context.Context, u *user.User) (*user.Lo
 		return nil, err
 	}
 
-	return &user.LoginResult{User: user.NewUserPreview(u), MFAToken: mfaToken, Challenge: challenge}, nil
+	return &auth.LoginResult{User: user.NewUserPreview(u), MFAToken: mfaToken, Challenge: challenge}, nil
 }
 
-func (s *AuthService) VerifyMFA(ctx context.Context, mfaToken string, code string) (*user.SessionResult, error) {
+func (s *AuthService) VerifyMFA(ctx context.Context, mfaToken string, code string) (*auth.SessionResult, error) {
 	u, err := s.userFromMFAToken(ctx, mfaToken)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.codes.Verify(ctx, u.ID, user.CodePurposeMFALogin, code); err != nil {
+	if err := s.codes.Verify(ctx, u.ID, auth.CodePurposeMFALogin, code); err != nil {
 		return nil, err
 	}
 	return s.session(ctx, u)
@@ -200,13 +203,13 @@ func (s *AuthService) VerifyMFA(ctx context.Context, mfaToken string, code strin
 
 // ResendMFACode заодно перевыпускает MFA-токен: иначе окно на ввод кода
 // закончилось бы раньше самого кода.
-func (s *AuthService) ResendMFACode(ctx context.Context, mfaToken string) (string, *user.CodeChallenge, error) {
+func (s *AuthService) ResendMFACode(ctx context.Context, mfaToken string) (string, *auth.CodeChallenge, error) {
 	u, err := s.userFromMFAToken(ctx, mfaToken)
 	if err != nil {
 		return "", nil, err
 	}
 
-	challenge, err := s.codes.Issue(ctx, u, user.CodePurposeMFALogin, mailer.TemplateLoginCode)
+	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeMFALogin, mailer.TemplateLoginCode)
 	if err != nil {
 		return "", nil, err
 	}
@@ -221,7 +224,7 @@ func (s *AuthService) ResendMFACode(ctx context.Context, mfaToken string) (strin
 
 // StartEnableTwoFactor требует пароль: включать второй фактор не должен уметь
 // тот, кто просто перехватил активную сессию.
-func (s *AuthService) StartEnableTwoFactor(ctx context.Context, id user.UserID, password string) (*user.CodeChallenge, error) {
+func (s *AuthService) StartEnableTwoFactor(ctx context.Context, id user.UserID, password string) (*auth.CodeChallenge, error) {
 	u, err := s.authenticateByPassword(ctx, id, password)
 	if err != nil {
 		return nil, err
@@ -229,7 +232,7 @@ func (s *AuthService) StartEnableTwoFactor(ctx context.Context, id user.UserID, 
 	if u.TwoFactorEnabled {
 		return nil, user.ErrTwoFactorState
 	}
-	return s.codes.Issue(ctx, u, user.CodePurposeMFAEnable, mailer.TemplateEnableTwoFactor)
+	return s.codes.Issue(ctx, u, auth.CodePurposeMFAEnable, mailer.TemplateEnableTwoFactor)
 }
 
 // ConfirmEnableTwoFactor включает второй фактор только после успешного ввода
@@ -239,7 +242,7 @@ func (s *AuthService) ConfirmEnableTwoFactor(ctx context.Context, id user.UserID
 	if err != nil {
 		return nil, err
 	}
-	if err := s.codes.Verify(ctx, u.ID, user.CodePurposeMFAEnable, code); err != nil {
+	if err := s.codes.Verify(ctx, u.ID, auth.CodePurposeMFAEnable, code); err != nil {
 		return nil, err
 	}
 	if err := s.repo.SetTwoFactorEnabled(ctx, u.ID, true); err != nil {
@@ -287,7 +290,7 @@ func (s *AuthService) RestoreAccount(ctx context.Context, email, password string
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-		return nil, user.ErrInvalidCredentials
+		return nil, auth.ErrInvalidCredentials
 	}
 	// Срок проверяется после пароля — иначе ответ про истёкшее окно сообщал
 	// бы кому угодно, что такой адрес когда-то был зарегистрирован.
@@ -320,17 +323,17 @@ func (s *AuthService) loginOnMissingAccount(ctx context.Context, email, password
 	if errors.Is(err, user.ErrNotFound) {
 		// Хеш всё равно считаем — ради одинакового времени ответа.
 		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(password))
-		return user.ErrInvalidCredentials
+		return auth.ErrInvalidCredentials
 	}
 	if err != nil {
 		return err
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-		return user.ErrInvalidCredentials
+		return auth.ErrInvalidCredentials
 	}
 	if !s.restorable(u) {
-		return user.ErrInvalidCredentials
+		return auth.ErrInvalidCredentials
 	}
 	return user.ErrAccountDeleted
 }
@@ -342,14 +345,14 @@ func (s *AuthService) restoreOnMissingAccount(ctx context.Context, email, passwo
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(email))
 	if errors.Is(err, user.ErrNotFound) {
 		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(password))
-		return user.ErrInvalidCredentials
+		return auth.ErrInvalidCredentials
 	}
 	if err != nil {
 		return err
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-		return user.ErrInvalidCredentials
+		return auth.ErrInvalidCredentials
 	}
 	return user.ErrAccountNotDeleted
 }
@@ -363,7 +366,7 @@ func (s *AuthService) restoreOnMissingAccount(ctx context.Context, email, passwo
 // Неподтверждённому аккаунту письмо тоже не уходит. Менять там нечего: такая
 // заявка перезаписывается повторной регистрацией, а разослать письмо о сбросе
 // на чужой, ещё не подтверждённый адрес иначе мог бы кто угодно.
-func (s *AuthService) StartPasswordReset(ctx context.Context, email string) (*user.CodeChallenge, error) {
+func (s *AuthService) StartPasswordReset(ctx context.Context, email string) (*auth.CodeChallenge, error) {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(email))
 	if errors.Is(err, user.ErrNotFound) {
 		return s.codes.Challenge(time.Now()), nil
@@ -375,7 +378,7 @@ func (s *AuthService) StartPasswordReset(ctx context.Context, email string) (*us
 		return s.codes.Challenge(time.Now()), nil
 	}
 
-	return s.codes.Issue(ctx, u, user.CodePurposePasswordReset, mailer.TemplatePasswordReset)
+	return s.codes.Issue(ctx, u, auth.CodePurposePasswordReset, mailer.TemplatePasswordReset)
 }
 
 // ResetPassword меняет пароль по коду из письма.
@@ -385,12 +388,12 @@ func (s *AuthService) StartPasswordReset(ctx context.Context, email string) (*us
 // выдай мы сессию, сброс пароля стал бы обходом 2FA для того, кто получил
 // доступ к ящику. После смены пароля нужно войти обычным путём, со всеми
 // факторами.
-func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword) error {
+func (s *AuthService) ResetPassword(ctx context.Context, req *auth.ResetPassword) error {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
 	if errors.Is(err, user.ErrNotFound) {
 		// Тот же ответ, что и на неверный код: иначе эндпоинт становится
 		// способом проверять, зарегистрирован ли адрес (см. VerifyEmail).
-		return user.ErrCodeInvalid
+		return auth.ErrCodeInvalid
 	}
 	if err != nil {
 		return err
@@ -398,7 +401,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword
 	// Кода для неподтверждённого аккаунта не выдавалось, но проверка стоит
 	// явно: без неё путь зависел бы от того, что StartPasswordReset промолчал.
 	if !u.EmailVerified() {
-		return user.ErrCodeInvalid
+		return auth.ErrCodeInvalid
 	}
 
 	// Код проверяется раньше, чем новый пароль сравнивается с текущим.
@@ -408,11 +411,11 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword
 	// пользователя, и исправлять её он должен тем же кодом, а не новым письмом.
 	sameAsCurrent := func() error {
 		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) == nil {
-			return user.ErrPasswordUnchanged
+			return auth.ErrPasswordUnchanged
 		}
 		return nil
 	}
-	if err := s.codes.VerifyThen(ctx, u.ID, user.CodePurposePasswordReset, req.Code, sameAsCurrent); err != nil {
+	if err := s.codes.VerifyThen(ctx, u.ID, auth.CodePurposePasswordReset, req.Code, sameAsCurrent); err != nil {
 		return err
 	}
 
@@ -425,21 +428,21 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword
 //
 // Ответы для чужого и неизвестного адреса те же, что у Login: эндпоинт не
 // должен становиться способом проверять, зарегистрирован ли адрес.
-func (s *AuthService) ChangeInitialPassword(ctx context.Context, req *user.ChangeInitialPassword) (*user.LoginResult, error) {
+func (s *AuthService) ChangeInitialPassword(ctx context.Context, req *auth.ChangeInitialPassword) (*auth.LoginResult, error) {
 	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
 	if errors.Is(err, user.ErrNotFound) {
 		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
-		return nil, user.ErrInvalidCredentials
+		return nil, auth.ErrInvalidCredentials
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
-		return nil, user.ErrInvalidCredentials
+		return nil, auth.ErrInvalidCredentials
 	}
 	if !u.MustChangePassword {
-		return nil, user.ErrNoTemporaryPassword
+		return nil, auth.ErrNoTemporaryPassword
 	}
 
 	if err := s.replacePassword(ctx, u, req.NewPassword); err != nil {
@@ -454,7 +457,7 @@ func (s *AuthService) ChangeInitialPassword(ctx context.Context, req *user.Chang
 // сессиями гасится и сессия вызывающего клиента, поэтому взамен он сразу
 // получает новую пару токенов: для него смена пароля проходит незаметно,
 // а прочие устройства разлогиниваются.
-func (s *AuthService) ChangePassword(ctx context.Context, id user.UserID, req *user.ChangePassword) (*user.SessionResult, error) {
+func (s *AuthService) ChangePassword(ctx context.Context, id user.UserID, req *auth.ChangePassword) (*auth.SessionResult, error) {
 	u, err := s.authenticateByPassword(ctx, id, req.CurrentPassword)
 	if err != nil {
 		return nil, err
@@ -477,7 +480,7 @@ func (s *AuthService) replacePassword(ctx context.Context, u *user.User, passwor
 	// Совпадение с текущим паролем — отказ, а не тихий успех: иначе смена
 	// пароля после утечки ничего не меняет, а пользователь считает иначе.
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) == nil {
-		return user.ErrPasswordUnchanged
+		return auth.ErrPasswordUnchanged
 	}
 
 	hash, err := hashPassword(password)
@@ -487,7 +490,7 @@ func (s *AuthService) replacePassword(ctx context.Context, u *user.User, passwor
 	if err := s.repo.UpdatePassword(ctx, u.ID, hash); err != nil {
 		return err
 	}
-	if err := s.repo.DeleteAllRefreshTokens(ctx, u.ID); err != nil {
+	if err := s.sessions.DeleteAllRefreshTokens(ctx, u.ID); err != nil {
 		return err
 	}
 
@@ -514,12 +517,12 @@ func (s *AuthService) syncRevocations(ctx context.Context) {
 
 // ---- сессии ----
 
-func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*user.TokenResponse, error) {
+func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*auth.TokenResponse, error) {
 	tokenHash := HashRefreshToken(refreshToken)
 
-	rt, err := s.repo.GetRefreshToken(ctx, tokenHash)
+	rt, err := s.sessions.GetRefreshToken(ctx, tokenHash)
 	if errors.Is(err, user.ErrNotFound) {
-		return nil, user.ErrInvalidToken
+		return nil, auth.ErrInvalidToken
 	}
 	if err != nil {
 		return nil, err
@@ -528,29 +531,29 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*user.T
 	// Повторное использование уже отозванного токена — признак кражи:
 	// отзываем все сессии пользователя.
 	if rt.RevokedAt != nil {
-		_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
-		return nil, user.ErrInvalidToken
+		_ = s.sessions.DeleteAllRefreshTokens(ctx, rt.UserID)
+		return nil, auth.ErrInvalidToken
 	}
 
 	if time.Now().After(rt.ExpiresAt) {
-		_ = s.repo.DeleteRefreshToken(ctx, tokenHash)
-		return nil, user.ErrInvalidToken
+		_ = s.sessions.DeleteRefreshToken(ctx, tokenHash)
+		return nil, auth.ErrInvalidToken
 	}
 
 	u, err := s.repo.GetByID(ctx, rt.UserID)
 	if errors.Is(err, user.ErrNotFound) {
-		_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
-		return nil, user.ErrInvalidToken
+		_ = s.sessions.DeleteAllRefreshTokens(ctx, rt.UserID)
+		return nil, auth.ErrInvalidToken
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.repo.RevokeRefreshToken(ctx, tokenHash); err != nil {
+	if err := s.sessions.RevokeRefreshToken(ctx, tokenHash); err != nil {
 		if errors.Is(err, user.ErrNotFound) {
 			// Токен успели отозвать параллельно — тоже reuse.
-			_ = s.repo.DeleteAllRefreshTokens(ctx, rt.UserID)
-			return nil, user.ErrInvalidToken
+			_ = s.sessions.DeleteAllRefreshTokens(ctx, rt.UserID)
+			return nil, auth.ErrInvalidToken
 		}
 		return nil, err
 	}
@@ -559,10 +562,10 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*user.T
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
-	return s.repo.DeleteRefreshToken(ctx, HashRefreshToken(refreshToken))
+	return s.sessions.DeleteRefreshToken(ctx, HashRefreshToken(refreshToken))
 }
 
-func (s *AuthService) ValidateAccessToken(token string) (*user.Claims, error) {
+func (s *AuthService) ValidateAccessToken(token string) (*auth.Claims, error) {
 	return s.tokens.ParseAccessToken(token)
 }
 
@@ -572,12 +575,12 @@ func (s *AuthService) GetByID(ctx context.Context, id user.UserID) (*user.User, 
 
 // ---- helpers ----
 
-func (s *AuthService) session(ctx context.Context, u *user.User) (*user.SessionResult, error) {
+func (s *AuthService) session(ctx context.Context, u *user.User) (*auth.SessionResult, error) {
 	tokens, err := s.tokens.IssueSession(ctx, u)
 	if err != nil {
 		return nil, err
 	}
-	return &user.SessionResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
+	return &auth.SessionResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
 }
 
 func (s *AuthService) userFromMFAToken(ctx context.Context, mfaToken string) (*user.User, error) {
@@ -587,14 +590,14 @@ func (s *AuthService) userFromMFAToken(ctx context.Context, mfaToken string) (*u
 	}
 	u, err := s.repo.GetByID(ctx, claims.UserID())
 	if errors.Is(err, user.ErrNotFound) {
-		return nil, user.ErrInvalidToken
+		return nil, auth.ErrInvalidToken
 	}
 	if err != nil {
 		return nil, err
 	}
 	// Пароль сменили, пока ждали второй фактор, — первый шаг уже не в счёт.
 	if claims.TokenVersion != u.TokenVersion {
-		return nil, user.ErrInvalidToken
+		return nil, auth.ErrInvalidToken
 	}
 	return u, nil
 }
@@ -613,7 +616,7 @@ func (s *AuthService) authenticateByPassword(ctx context.Context, id user.UserID
 		return nil, err
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-		return nil, user.ErrInvalidCredentials
+		return nil, auth.ErrInvalidCredentials
 	}
 	return u, nil
 }

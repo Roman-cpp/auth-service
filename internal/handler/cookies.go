@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/krypton/auth-service/internal/config"
-	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/domain/auth"
 )
 
 const (
@@ -46,7 +46,7 @@ func (cm *CookieManager) cookie(name, value, path string, maxAge int) *http.Cook
 	}
 }
 
-func (cm *CookieManager) SetSessionCookies(w http.ResponseWriter, tokens *user.TokenResponse) {
+func (cm *CookieManager) SetSessionCookies(w http.ResponseWriter, tokens *auth.TokenResponse) {
 	http.SetCookie(w, cm.cookie(accessTokenCookie, tokens.AccessToken, "/", int(tokens.ExpiresIn)))
 	http.SetCookie(w, cm.cookie(refreshTokenCookie, tokens.RefreshToken, cm.refreshTokenPath(),
 		int(cm.cfg.JWT.RefreshTokenTTL.Seconds())))
