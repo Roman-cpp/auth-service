@@ -12,9 +12,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krypton/auth-service/internal/config"
+	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/handler"
 	"github.com/krypton/auth-service/internal/mailer"
-	"github.com/krypton/auth-service/internal/middleware"
+	"github.com/krypton/auth-service/internal/middleware/authn"
+	"github.com/krypton/auth-service/internal/middleware/authz"
 	"github.com/krypton/auth-service/internal/repository"
 	"github.com/krypton/auth-service/internal/router"
 	"github.com/krypton/auth-service/internal/service"
@@ -58,10 +60,12 @@ func run() error {
 
 	repo := repository.NewUserRepository(pool)
 	mail := mailer.New(mailer.NewSender(cfg.SMTP, log), cfg.SMTP.FromName)
+
 	tokens := service.NewTokenIssuer(repo, cfg.JWT)
 	codes := service.NewCodeService(repo, mail, cfg.Codes)
-	authSvc := service.NewAuthService(repo, tokens, codes, cfg.Account)
-	userSvc := service.NewUserService(repo, cfg.Account)
+	revocations := service.NewRevocationList(repo)
+	authSvc := service.NewAuthService(repo, tokens, codes, revocations, cfg.Account)
+	userSvc := service.NewUserService(repo, revocations, cfg.Account)
 	adminSvc := service.NewAdminService(repo)
 
 	// Не фатально: без этого сервис работает, просто без новых модераторов.
@@ -71,15 +75,22 @@ func run() error {
 		log.Info("moderators promoted from MODERATOR_EMAILS", slog.Int64("count", promoted))
 	}
 
+	// Фатально: без списка отзыва authn не может честно проверить ни один
+	// токен. Загружается после выдачи ролей, чтобы уже учесть её.
+	if err := revocations.Sync(ctx); err != nil {
+		return err
+	}
+	go revocations.Run(ctx, log)
+
 	handlers := router.NewRouter(
 		handler.NewAuthHandler(authSvc, cfg, log),
 		handler.NewUserHandler(userSvc, cfg, log),
 		handler.NewAdminHandler(adminSvc, log),
-		middleware.JWTAuth(authSvc),
-		middleware.RequireModerator(adminSvc, log),
+		authn.JWTAuth(authSvc, revocations, log),
+		authz.RequireRole(user.RoleModerator),
 	)
 
-	go runCleanup(ctx, repo, cfg.Account, log)
+	go runCleanup(ctx, repo, cfg, log)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Service.Port,
@@ -134,7 +145,7 @@ func newLogger(cfg config.ServiceConfig) *slog.Logger {
 // runCleanup убирает протухшие refresh-токены и одноразовые коды, а также
 // аккаунты, у которых кончилось окно восстановления. Первые две таблицы
 // растут при каждом входе, и без уборки чистятся только вручную.
-func runCleanup(ctx context.Context, repo *repository.UserRepository, account config.AccountConfig, log *slog.Logger) {
+func runCleanup(ctx context.Context, repo *repository.UserRepository, cfg *config.Config, log *slog.Logger) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
@@ -149,11 +160,18 @@ func runCleanup(ctx context.Context, repo *repository.UserRepository, account co
 			if err := repo.DeleteExpiredAuthCodes(ctx); err != nil {
 				log.Error("cleanup auth codes", slog.Any("error", err))
 			}
+			// Запись об отзыве нужна, пока жив хоть один токен со старой
+			// версией, — не дольше TTL access-токена. Запас — на случай,
+			// если TTL успели поднять, пока токены ещё живы.
+			staleBefore := time.Now().Add(-2 * cfg.JWT.AccessTokenTTL)
+			if err := repo.DeleteStaleTokenRevocations(ctx, staleBefore); err != nil {
+				log.Error("cleanup token revocations", slog.Any("error", err))
+			}
 
 			// Удаление аккаунта логическое: строка живёт, пока её можно
 			// вернуть. Здесь она уходит окончательно, унося каскадом коды
 			// и refresh-токены.
-			purged, err := repo.PurgeDeletedUsers(ctx, time.Now().Add(-account.RestoreWindow))
+			purged, err := repo.PurgeDeletedUsers(ctx, time.Now().Add(-cfg.Account.RestoreWindow))
 			if err != nil {
 				log.Error("purge deleted users", slog.Any("error", err))
 			}

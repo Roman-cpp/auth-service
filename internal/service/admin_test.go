@@ -124,19 +124,28 @@ func TestCreateUserDoesNotOverwriteVerifiedAccount(t *testing.T) {
 	}
 }
 
-func TestModeratorRoleComesFromDatabase(t *testing.T) {
+func TestPromoteModerators(t *testing.T) {
 	h := newHarness(t)
 	u := h.registerVerified(t, "boss@example.com")
 	admin := h.admin()
 
-	if ok, _ := admin.IsModerator(t.Context(), u.ID); ok {
+	role := func() user.Role {
+		t.Helper()
+		got, err := h.repo.GetByID(t.Context(), u.ID)
+		if err != nil {
+			t.Fatalf("get user: %v", err)
+		}
+		return got.Role
+	}
+
+	if role() != user.RoleUser {
 		t.Fatal("fresh user must not be a moderator")
 	}
 	n, err := admin.PromoteModerators(t.Context(), []string{" BOSS@example.com", ""})
 	if err != nil || n != 1 {
 		t.Fatalf("promote: n=%d err=%v", n, err)
 	}
-	if ok, _ := admin.IsModerator(t.Context(), u.ID); !ok {
+	if role() != user.RoleModerator {
 		t.Fatal("promoted user must be a moderator")
 	}
 	if n, _ := admin.PromoteModerators(t.Context(), []string{"boss@example.com"}); n != 0 {

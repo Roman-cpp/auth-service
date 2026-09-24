@@ -119,10 +119,13 @@ type Login struct {
 	Password string `json:"password" validate:"required"`
 }
 
+// TokenResponse — выданная пара токенов. Клиенту она уходит только
+// httpOnly-куками (CookieManager.SetSessionCookies), поэтому JSON-тегов
+// нет: в теле ответа токенам делать нечего.
 type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int64  `json:"expires_in"`
+	AccessToken  string `json:"-"`
+	RefreshToken string `json:"-"`
+	ExpiresIn    int64  `json:"-"`
 }
 
 // CodeChallenge — то, что нужно знать клиенту про выданный код: когда он

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -16,11 +17,13 @@ import (
 // поведение, которое опирается на БД (уникальность живого кода, «ноль строк
 // = ErrNotFound»), воспроизведено здесь явно.
 type fakeRepo struct {
-	mu       sync.Mutex
-	seq      int
-	users    map[user.UserID]*user.User
-	codes    map[string]*user.AuthCode
-	refresh  map[string]*user.RefreshToken
+	mu      sync.Mutex
+	seq     int
+	users   map[user.UserID]*user.User
+	codes   map[string]*user.AuthCode
+	refresh map[string]*user.RefreshToken
+	// revoked повторяет таблицу token_revocations, которую в базе ведёт триггер.
+	revoked  map[user.UserID]int64
 	nowFunc  func() time.Time
 	issueErr error
 }
@@ -30,6 +33,7 @@ func newFakeRepo() *fakeRepo {
 		users:   map[user.UserID]*user.User{},
 		codes:   map[string]*user.AuthCode{},
 		refresh: map[string]*user.RefreshToken{},
+		revoked: map[user.UserID]int64{},
 		nowFunc: time.Now,
 	}
 }
@@ -53,6 +57,7 @@ func (f *fakeRepo) Upsert(_ context.Context, dto user.CreateDTO) (*user.User, er
 			return nil, user.ErrEmailTaken
 		}
 		f.applyCreate(u, dto)
+		f.bumpTokenVersion(u)
 		u.UpdatedAt = f.now()
 		return cloneUser(u), nil
 	}
@@ -139,6 +144,7 @@ func (f *fakeRepo) SoftDelete(_ context.Context, id user.UserID) (time.Time, err
 	}
 	deleted := f.now()
 	u.DeletedAt = &deleted
+	f.bumpTokenVersion(u)
 	return deleted, nil
 }
 
@@ -164,6 +170,7 @@ func (f *fakeRepo) Restore(_ context.Context, id user.UserID) error {
 	}
 
 	u.DeletedAt = nil
+	f.bumpTokenVersion(u)
 	u.UpdatedAt = f.now()
 	return nil
 }
@@ -179,6 +186,8 @@ func (f *fakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64
 		if u.DeletedAt == nil || !u.DeletedAt.Before(before) {
 			continue
 		}
+		// Как триггер на DELETE: токены физически удалённого отозваны.
+		f.revoked[id] = u.TokenVersion + 1
 		delete(f.users, id)
 		purged++
 
@@ -218,6 +227,7 @@ func (f *fakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHas
 		return user.ErrNotFound
 	}
 	u.PasswordHash = passwordHash
+	f.bumpTokenVersion(u)
 	u.MustChangePassword = false
 	u.UpdatedAt = f.now()
 	return nil
@@ -261,10 +271,29 @@ func (f *fakeRepo) PromoteModerators(_ context.Context, emails []string) (int64,
 	for _, u := range f.users {
 		if u.DeletedAt == nil && u.Role != user.RoleModerator && slices.Contains(emails, u.Email) {
 			u.Role = user.RoleModerator
+			f.bumpTokenVersion(u)
 			n++
 		}
 	}
 	return n, nil
+}
+
+// bumpTokenVersion повторяет триггеры users_bump_token_version и
+// users_record_token_revocation. Вызывается под f.mu.
+func (f *fakeRepo) bumpTokenVersion(u *user.User) {
+	u.TokenVersion++
+	f.revoked[u.ID] = u.TokenVersion
+}
+
+func (f *fakeRepo) TokenRevocations(context.Context) (map[user.UserID]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.revoked), nil
+}
+
+// Моментов изменения фейк не хранит: уборку записей тесты не проверяют.
+func (f *fakeRepo) DeleteStaleTokenRevocations(context.Context, time.Time) error {
+	return nil
 }
 
 func deref(s *string) string {

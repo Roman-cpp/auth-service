@@ -83,8 +83,9 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(authMw)
 				r.Post("/logout", authH.Logout)
-				// Без лимитера намеренно: в этот маршрут ходит auth_request
+				// Без лимитера намеренно: в /validate ходит auth_request
 				// гейтвея на КАЖДЫЙ запрос к защищённым сервисам.
+				r.Get("/validate", authH.Validate)
 				r.Get("/me", authH.Me)
 
 				r.Route("/2fa", func(r chi.Router) {

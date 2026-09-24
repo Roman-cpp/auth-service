@@ -54,8 +54,8 @@ func TestAccessTokenRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse access token: %v", err)
 	}
-	if claims.UserID != u.ID {
-		t.Errorf("user id = %q, want %q", claims.UserID, u.ID)
+	if claims.UserID() != u.ID {
+		t.Errorf("user id = %q, want %q", claims.UserID(), u.ID)
 	}
 	if claims.TokenType != user.TokenTypeAccess {
 		t.Errorf("token type = %q, want %q", claims.TokenType, user.TokenTypeAccess)
@@ -83,8 +83,8 @@ func TestUnsignedTokenIsRejected(t *testing.T) {
 	h := newHarness(t)
 
 	claims := &user.Claims{
-		UserID:    "user-1",
 		TokenType: user.TokenTypeAccess,
+		Role:      user.RoleModerator,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   "user-1",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),

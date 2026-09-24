@@ -17,7 +17,7 @@ import (
 // в три места.
 const userColumns = `id, email, password_hash, last_name, first_name, patronymic,
 	email_verified_at, two_factor_enabled, role, must_change_password, created_by,
-	deleted_at, created_at, updated_at`
+	token_version, deleted_at, created_at, updated_at`
 
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -36,7 +36,7 @@ func scanUser(row rowScanner) (*user.User, error) {
 	err := row.Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.LastName, &u.FirstName, &u.Patronymic,
 		&u.EmailVerifiedAt, &u.TwoFactorEnabled, &u.Role, &u.MustChangePassword, &u.CreatedBy,
-		&u.DeletedAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.TokenVersion, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, user.ErrNotFound
@@ -245,6 +245,34 @@ func (r *UserRepository) SetTwoFactorEnabled(ctx context.Context, id user.UserID
 	return r.execExpectingRow(ctx,
 		`UPDATE users SET two_factor_enabled = $2, updated_at = NOW()
 		  WHERE id = $1 AND deleted_at IS NULL AND two_factor_enabled <> $2`, id, enabled)
+}
+
+// ---- отзыв токенов ----
+
+func (r *UserRepository) TokenRevocations(ctx context.Context) (map[user.UserID]int64, error) {
+	rows, err := r.pool.Query(ctx, `SELECT user_id, token_version FROM token_revocations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	versions := map[user.UserID]int64{}
+	for rows.Next() {
+		var (
+			id  user.UserID
+			ver int64
+		)
+		if err := rows.Scan(&id, &ver); err != nil {
+			return nil, err
+		}
+		versions[id] = ver
+	}
+	return versions, rows.Err()
+}
+
+func (r *UserRepository) DeleteStaleTokenRevocations(ctx context.Context, before time.Time) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM token_revocations WHERE changed_at < $1`, before)
+	return err
 }
 
 // ---- одноразовые коды ----

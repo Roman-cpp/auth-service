@@ -39,6 +39,13 @@ type Repository interface {
 	// адресами и возвращает, сколько строк изменилось.
 	PromoteModerators(ctx context.Context, emails []string) (int64, error)
 
+	// TokenRevocations — текущие версии токенов пользователей, у которых
+	// недавно что-то отзывалось. Таблицу пополняет триггер в базе.
+	TokenRevocations(ctx context.Context) (map[UserID]int64, error)
+	// DeleteStaleTokenRevocations убирает записи старше before: все токены
+	// со старыми версиями к этому моменту уже истекли сами.
+	DeleteStaleTokenRevocations(ctx context.Context, before time.Time) error
+
 	// IssueAuthCode гасит предыдущий живой код той же пары
 	// (пользователь, назначение) и записывает новый.
 	IssueAuthCode(ctx context.Context, userID UserID, purpose CodePurpose, codeHash string, expiresAt time.Time) (*AuthCode, error)

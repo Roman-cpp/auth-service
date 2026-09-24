@@ -14,8 +14,11 @@ var (
 var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidToken       = errors.New("invalid or expired token")
-	ErrEmailNotVerified   = errors.New("email is not verified")
-	ErrEmailVerified      = errors.New("email is already verified")
+	// ErrRevocationsStale: список отозванных токенов давно не обновлялся
+	// (база недоступна). Проверить токен честно нельзя — отказываем.
+	ErrRevocationsStale = errors.New("token revocation list is stale")
+	ErrEmailNotVerified = errors.New("email is not verified")
+	ErrEmailVerified    = errors.New("email is already verified")
 	// ErrPasswordUnchanged: новый пароль совпал с текущим. Отдельная ошибка,
 	// а не тихий успех: пользователь, меняющий пароль после утечки, должен
 	// узнать, что ничего не изменилось.

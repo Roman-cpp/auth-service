@@ -68,6 +68,7 @@ type harness struct {
 	codes   *CodeService
 	auth    *AuthService
 	users   *UserService
+	revoked *RevocationList
 	jwtCfg  config.JWTConfig
 	account config.AccountConfig
 }
@@ -93,14 +94,19 @@ func newHarness(t *testing.T) *harness {
 
 	tokens := NewTokenIssuer(repo, jwtCfg)
 	codes := NewCodeService(repo, mailer.New(sender, "Nexus"), codesCfg)
+	revoked := NewRevocationList(repo)
+	if err := revoked.Sync(context.Background()); err != nil {
+		t.Fatalf("sync revocations: %v", err)
+	}
 
 	return &harness{
 		repo:    repo,
 		mails:   sender,
 		tokens:  tokens,
 		codes:   codes,
-		auth:    NewAuthService(repo, tokens, codes, accountCfg),
-		users:   NewUserService(repo, accountCfg),
+		auth:    NewAuthService(repo, tokens, codes, revoked, accountCfg),
+		users:   NewUserService(repo, revoked, accountCfg),
+		revoked: revoked,
 		jwtCfg:  jwtCfg,
 		account: accountCfg,
 	}

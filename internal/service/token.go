@@ -67,14 +67,17 @@ func (t *TokenIssuer) sign(u *user.User, typ user.TokenType, ttl time.Duration) 
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 	claims := &user.Claims{
-		UserID:    u.ID,
-		Email:     u.Email,
-		TokenType: typ,
+		TokenType:    typ,
+		TokenVersion: u.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   u.ID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
+	}
+	// Роль — только в access-токене: MFA-токену первого шага она не нужна.
+	if typ == user.TokenTypeAccess {
+		claims.Role = u.Role
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(t.cfg.Secret))
 	return signed, expiresAt, err
@@ -95,6 +98,16 @@ func (t *TokenIssuer) parse(tokenStr string, want user.TokenType) (*user.Claims,
 	// Без этой проверки MFA-токен первого шага прошёл бы как access-токен,
 	// то есть второй фактор обходился бы полностью.
 	if claims.TokenType != want {
+		return nil, user.ErrInvalidToken
+	}
+	if claims.Subject == "" {
+		return nil, user.ErrInvalidToken
+	}
+	// Access-токены, выданные до появления роли в токене, роли не несут.
+	// Отказ здесь — это 401 и тихий refresh на клиенте, после которого
+	// токен приходит уже с ролью; «пустая роль = обычный пользователь»
+	// на 15 минут лишила бы модератора админки.
+	if want == user.TokenTypeAccess && !claims.Role.Valid() {
 		return nil, user.ErrInvalidToken
 	}
 	return claims, nil

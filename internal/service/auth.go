@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -30,14 +31,28 @@ var dummyPasswordHash = sync.OnceValue(func() []byte {
 })
 
 type AuthService struct {
-	repo    user.Repository
-	tokens  *TokenIssuer
-	codes   *CodeService
-	account config.AccountConfig
+	repo        user.Repository
+	tokens      *TokenIssuer
+	codes       *CodeService
+	revocations RevocationSyncer
+	account     config.AccountConfig
 }
 
-func NewAuthService(repo user.Repository, tokens *TokenIssuer, codes *CodeService, account config.AccountConfig) *AuthService {
-	return &AuthService{repo: repo, tokens: tokens, codes: codes, account: account}
+// RevocationSyncer — операции, отзывающие токены (смена пароля, удаление),
+// дёргают Sync, чтобы отзыв на этом экземпляре действовал сразу, а не
+// к следующему тику фоновой синхронизации.
+type RevocationSyncer interface {
+	Sync(ctx context.Context) error
+}
+
+func NewAuthService(
+	repo user.Repository,
+	tokens *TokenIssuer,
+	codes *CodeService,
+	revocations RevocationSyncer,
+	account config.AccountConfig,
+) *AuthService {
+	return &AuthService{repo: repo, tokens: tokens, codes: codes, revocations: revocations, account: account}
 }
 
 // ---- регистрация и подтверждение почты ----
@@ -451,13 +466,13 @@ func (s *AuthService) ChangePassword(ctx context.Context, id user.UserID, req *u
 }
 
 // replacePassword — общая часть сброса и смены: новый хеш и отзыв всех
-// refresh-токенов.
+// сессий пользователя.
 //
 // Отзыв сессий здесь не побочный эффект, а половина смысла операции: пароль
 // меняют в том числе потому, что старый утёк, и тот, кто успел войти по
-// старому паролю, обязан потерять доступ. Выданные access-токены переживут
-// смену — до конца своего TTL (JWT_ACCESS_TTL, по умолчанию 15 минут);
-// чтобы гасить и их, нужен deny-list, которого в сервисе пока нет.
+// старому паролю, обязан потерять доступ. Refresh-токены удаляются, а уже
+// выданные access-токены отзываются сразу: смена пароля поднимает их версию
+// (триггер в базе), и RevocationList перестаёт их принимать.
 func (s *AuthService) replacePassword(ctx context.Context, u *user.User, password string) error {
 	// Совпадение с текущим паролем — отказ, а не тихий успех: иначе смена
 	// пароля после утечки ничего не меняет, а пользователь считает иначе.
@@ -472,9 +487,29 @@ func (s *AuthService) replacePassword(ctx context.Context, u *user.User, passwor
 	if err := s.repo.UpdatePassword(ctx, u.ID, hash); err != nil {
 		return err
 	}
-	u.PasswordHash = hash
+	if err := s.repo.DeleteAllRefreshTokens(ctx, u.ID); err != nil {
+		return err
+	}
 
-	return s.repo.DeleteAllRefreshTokens(ctx, u.ID)
+	// Триггер поднял версию токенов — перечитываем пользователя, иначе
+	// сессия, которую вызывающий откроет следом, получила бы старую версию
+	// и сразу оказалась бы отозванной.
+	fresh, err := s.repo.GetByID(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	*u = *fresh
+
+	s.syncRevocations(ctx)
+	return nil
+}
+
+// syncRevocations: ошибка не прерывает операцию — пароль уже сменён, а
+// отзыв догонит фоновая синхронизация через RevocationSyncInterval.
+func (s *AuthService) syncRevocations(ctx context.Context) {
+	if err := s.revocations.Sync(ctx); err != nil {
+		slog.ErrorContext(ctx, "sync token revocations", slog.Any("error", err))
+	}
 }
 
 // ---- сессии ----
@@ -550,11 +585,18 @@ func (s *AuthService) userFromMFAToken(ctx context.Context, mfaToken string) (*u
 	if err != nil {
 		return nil, err
 	}
-	u, err := s.repo.GetByID(ctx, claims.UserID)
+	u, err := s.repo.GetByID(ctx, claims.UserID())
 	if errors.Is(err, user.ErrNotFound) {
 		return nil, user.ErrInvalidToken
 	}
-	return u, err
+	if err != nil {
+		return nil, err
+	}
+	// Пароль сменили, пока ждали второй фактор, — первый шаг уже не в счёт.
+	if claims.TokenVersion != u.TokenVersion {
+		return nil, user.ErrInvalidToken
+	}
+	return u, nil
 }
 
 func hashPassword(password string) (string, error) {

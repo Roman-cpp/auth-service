@@ -34,6 +34,7 @@ func TestRouteTable(t *testing.T) {
 		"POST /api/v1/auth/password/initial",
 		"POST /api/v1/auth/account/restore",
 		"GET /api/v1/auth/me",
+		"GET /api/v1/auth/validate",
 		"DELETE /api/v1/users/{id}",
 		"GET /api/v1/admin/users",
 		"POST /api/v1/admin/users",

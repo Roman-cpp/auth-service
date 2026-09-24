@@ -37,9 +37,12 @@ type User struct {
 	MustChangePassword bool
 	// CreatedBy — модератор, заведший аккаунт; nil — зарегистрировался сам.
 	CreatedBy *UserID
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	DeletedAt *time.Time
+	// TokenVersion поднимает база (триггер) при смене роли, пароля и
+	// удалении. Токены с версией ниже текущей считаются отозванными.
+	TokenVersion int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DeletedAt    *time.Time
 }
 
 // EmailVerified — единственный признак «аккаунтом можно пользоваться».
@@ -110,11 +113,21 @@ const (
 	TokenTypeMFA    TokenType = "mfa"
 )
 
+// Claims — содержимое JWT. Идентификатор пользователя — стандартный sub.
+// Почты и прочих персональных данных здесь нет: payload подписан, но не
+// зашифрован, и прочитать его может любой, у кого оказался токен.
 type Claims struct {
-	UserID    UserID    `json:"user_id"`
-	Email     string    `json:"email"`
 	TokenType TokenType `json:"typ"`
+	// Role есть только в access-токене. Держать её в токене безопасно,
+	// потому что смена роли поднимает TokenVersion и старые токены отзываются.
+	Role Role `json:"role,omitempty"`
+	// TokenVersion — версия токенов пользователя на момент выдачи.
+	TokenVersion int64 `json:"ver"`
 	jwt.RegisteredClaims
+}
+
+func (c *Claims) UserID() UserID {
+	return c.Subject
 }
 
 // CodePurpose разделяет одноразовые коды по назначению: код подтверждения

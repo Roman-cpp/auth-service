@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"strings"
 
 	"github.com/krypton/auth-service/internal/domain/user"
@@ -20,26 +19,14 @@ const (
 )
 
 // AdminService — операции админки. Право на них проверяется до сервиса,
-// в middleware по роли; здесь — только правила самих операций.
+// в middleware по роли (authz.RequireRole); здесь — только правила самих
+// операций.
 type AdminService struct {
 	repo user.Repository
 }
 
 func NewAdminService(repo user.Repository) *AdminService {
 	return &AdminService{repo: repo}
-}
-
-// IsModerator читает роль из базы, а не из токена: снятие роли должно
-// действовать сразу, а не когда истечёт уже выданный access-токен.
-func (s *AdminService) IsModerator(ctx context.Context, id user.UserID) (bool, error) {
-	u, err := s.repo.GetByID(ctx, id)
-	if errors.Is(err, user.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return u.Role == user.RoleModerator, nil
 }
 
 func (s *AdminService) ListUsers(ctx context.Context, f user.ListUsersFilter) ([]*user.AdminUserView, int, error) {

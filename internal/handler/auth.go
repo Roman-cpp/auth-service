@@ -6,7 +6,7 @@ import (
 
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/middleware"
+	"github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/internal/service"
 )
 
@@ -199,8 +199,26 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]string{"message": "logged out successfully"})
 }
 
+// Validate — ответ на auth_request гейтвея, который дёргает его на КАЖДЫЙ
+// запрос к защищённым сервисам. Поэтому ни базы, ни тела: authn уже проверил
+// подпись и отзыв токена, здесь только личность из него — в заголовки,
+// которые gateway пробрасывает сервисам.
+func (h *AuthHandler) Validate(w http.ResponseWriter, r *http.Request) {
+	id, ok := auth.IdentityFrom(r.Context())
+	if !ok {
+		h.fail(w, r, "validate", user.ErrInvalidToken)
+		return
+	}
+
+	w.Header().Set("X-User-Id", id.UserID)
+	w.Header().Set("X-User-Roles", id.Role)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Me — профиль вошедшего пользователя для фронтенда: читается из базы,
+// потому что в токене есть только id и роль.
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFrom(r.Context())
+	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		h.fail(w, r, "me", user.ErrInvalidToken)
 		return
@@ -212,7 +230,9 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// gateway's auth_request reads this header to propagate the identity to downstream services
+	// Заголовки для gateway, пока его auth_request не переведён на /validate:
+	// без них при выкатке сервиса раньше конфига nginx сервисы за гейтвеем
+	// остались бы без X-User-Id.
 	w.Header().Set("X-User-Id", u.ID)
 	w.Header().Set("X-User-Roles", string(u.Role))
 	writeData(w, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
@@ -277,7 +297,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 // ChangePassword выдаёт новую пару токенов: старая отозвана вместе со всеми
 // остальными сессиями, и без замены текущий клиент разлогинился бы сам.
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFrom(r.Context())
+	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		h.fail(w, r, "change_password", user.ErrInvalidToken)
 		return
@@ -300,7 +320,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 // ---- управление вторым фактором ----
 
 func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFrom(r.Context())
+	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		h.fail(w, r, "enable_2fa", user.ErrInvalidToken)
 		return
@@ -320,7 +340,7 @@ func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFrom(r.Context())
+	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		h.fail(w, r, "confirm_2fa", user.ErrInvalidToken)
 		return
@@ -340,7 +360,7 @@ func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFrom(r.Context())
+	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		h.fail(w, r, "disable_2fa", user.ErrInvalidToken)
 		return

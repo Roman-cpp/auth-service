@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/middleware"
+	"github.com/krypton/auth-service/internal/platform/auth"
 	"github.com/krypton/auth-service/internal/service"
 )
 
@@ -42,7 +42,7 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
-	actor, ok := middleware.UserIDFrom(r.Context())
+	actor, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		h.fail(w, r, "admin_create_user", user.ErrInvalidToken)
 		return
