@@ -11,7 +11,8 @@ import (
 // а проверяется здесь сама таблица — chi разбирает шаблоны при регистрации
 // и падает на конфликте, что без единого вызова роутера иначе не всплывёт.
 func TestRouteTable(t *testing.T) {
-	r := NewRouter(nil, nil, func(next http.Handler) http.Handler { return next })
+	pass := func(next http.Handler) http.Handler { return next }
+	r := NewRouter(nil, nil, nil, pass, pass)
 
 	registered := map[string]bool{}
 	err := chi.Walk(r.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -30,9 +31,12 @@ func TestRouteTable(t *testing.T) {
 		"POST /api/v1/auth/password/forgot",
 		"POST /api/v1/auth/password/reset",
 		"POST /api/v1/auth/password/change",
+		"POST /api/v1/auth/password/initial",
 		"POST /api/v1/auth/account/restore",
 		"GET /api/v1/auth/me",
 		"DELETE /api/v1/users/{id}",
+		"GET /api/v1/admin/users",
+		"POST /api/v1/admin/users",
 	}
 	for _, route := range want {
 		if !registered[route] {

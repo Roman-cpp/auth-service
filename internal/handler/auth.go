@@ -93,6 +93,27 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.writeLoginResult(w, result)
+}
+
+// ChangeInitialPassword — замена временного пароля. Отвечает так же, как
+// Login: пароль сменён, и вход сразу продолжается.
+func (h *AuthHandler) ChangeInitialPassword(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[user.ChangeInitialPassword](w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.ChangeInitialPassword(r.Context(), req)
+	if err != nil {
+		h.fail(w, r, "change_initial_password", err)
+		return
+	}
+
+	h.writeLoginResult(w, result)
+}
+
+func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, result *user.LoginResult) {
 	if result.MFARequired() {
 		h.cookies.SetMFACookie(w, result.MFAToken)
 		writeData(w, http.StatusOK, map[string]any{
@@ -193,6 +214,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 	// gateway's auth_request reads this header to propagate the identity to downstream services
 	w.Header().Set("X-User-Id", u.ID)
+	w.Header().Set("X-User-Roles", string(u.Role))
 	writeData(w, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
 }
 

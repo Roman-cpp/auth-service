@@ -1,0 +1,3 @@
+ALTER TABLE users DROP COLUMN IF EXISTS created_by;
+ALTER TABLE users DROP COLUMN IF EXISTS must_change_password;
+ALTER TABLE users DROP COLUMN IF EXISTS role;

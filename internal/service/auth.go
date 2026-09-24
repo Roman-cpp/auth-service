@@ -140,7 +140,18 @@ func (s *AuthService) Login(ctx context.Context, req *user.Login) (*user.LoginRe
 	if !u.EmailVerified() {
 		return nil, user.ErrEmailNotVerified
 	}
+	// Тоже после пароля, по той же причине. Временный пароль видел модератор,
+	// поэтому сессию по нему не выдаём: сначала владелец задаёт свой.
+	if u.MustChangePassword {
+		return nil, user.ErrPasswordChangeRequired
+	}
 
+	return s.completeLogin(ctx, u)
+}
+
+// completeLogin — вход после проверки пароля: сессия сразу или, если включён
+// второй фактор, MFA-токен и код на почту.
+func (s *AuthService) completeLogin(ctx context.Context, u *user.User) (*user.LoginResult, error) {
 	if !u.TwoFactorEnabled {
 		tokens, err := s.tokens.IssueSession(ctx, u)
 		if err != nil {
@@ -391,6 +402,37 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *user.ResetPassword
 	}
 
 	return s.replacePassword(ctx, u, req.Password)
+}
+
+// ChangeInitialPassword заменяет временный пароль, выданный модератором,
+// на собственный пароль владельца и сразу продолжает вход — ровно так, как
+// его продолжил бы Login: сессия или, если включён, второй фактор.
+//
+// Ответы для чужого и неизвестного адреса те же, что у Login: эндпоинт не
+// должен становиться способом проверять, зарегистрирован ли адрес.
+func (s *AuthService) ChangeInitialPassword(ctx context.Context, req *user.ChangeInitialPassword) (*user.LoginResult, error) {
+	u, err := s.repo.GetByEmail(ctx, normalizeEmail(req.Email))
+	if errors.Is(err, user.ErrNotFound) {
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
+		return nil, user.ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
+		return nil, user.ErrInvalidCredentials
+	}
+	if !u.MustChangePassword {
+		return nil, user.ErrNoTemporaryPassword
+	}
+
+	if err := s.replacePassword(ctx, u, req.NewPassword); err != nil {
+		return nil, err
+	}
+	u.MustChangePassword = false
+
+	return s.completeLogin(ctx, u)
 }
 
 // ChangePassword меняет пароль изнутри сессии. Вместе со всеми остальными

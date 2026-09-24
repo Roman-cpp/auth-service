@@ -57,6 +57,8 @@ var errorCatalog = []struct {
 	{user.ErrCodeInvalid, apiError{http.StatusBadRequest, "invalid_code", "неверный код подтверждения"}},
 	{user.ErrInvalidToken, apiError{http.StatusUnauthorized, "invalid_token", "сессия недействительна или истекла"}},
 	{user.ErrPasswordUnchanged, apiError{http.StatusBadRequest, "password_unchanged", "новый пароль совпадает с текущим"}},
+	{user.ErrPasswordChangeRequired, apiError{http.StatusForbidden, "password_change_required", "пароль временный — задайте собственный"}},
+	{user.ErrNoTemporaryPassword, apiError{http.StatusConflict, "password_not_temporary", "пароль уже не временный — войдите обычным способом"}},
 	{user.ErrTwoFactorState, apiError{http.StatusConflict, "two_factor_state", "двухфакторная аутентификация уже в этом состоянии"}},
 	{user.ErrAccountDeleted, apiError{http.StatusForbidden, "account_deleted", "аккаунт удалён — его ещё можно восстановить"}},
 	{user.ErrRestoreExpired, apiError{http.StatusGone, "restore_expired", "срок восстановления аккаунта истёк"}},

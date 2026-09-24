@@ -8,6 +8,19 @@ import (
 
 type UserID = string
 
+// Role — уровень доступа. Модератор ведёт админку: видит всех пользователей
+// и заводит новые аккаунты. Отдельной роли администратора нет.
+type Role string
+
+const (
+	RoleUser      Role = "user"
+	RoleModerator Role = "moderator"
+)
+
+func (r Role) Valid() bool {
+	return r == RoleUser || r == RoleModerator
+}
+
 type User struct {
 	ID               UserID
 	Email            string
@@ -18,9 +31,15 @@ type User struct {
 	Phone            string
 	EmailVerifiedAt  *time.Time
 	TwoFactorEnabled bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time
+	Role             Role
+	// MustChangePassword: пароль выдан модератором и владельцу не принадлежит.
+	// Пока флаг стоит, вход не открывает сессию — сначала смена пароля.
+	MustChangePassword bool
+	// CreatedBy — модератор, заведший аккаунт; nil — зарегистрировался сам.
+	CreatedBy *UserID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
 }
 
 // EmailVerified — единственный признак «аккаунтом можно пользоваться».
@@ -36,6 +55,7 @@ type UserPreview struct {
 	FirstName        string    `json:"first_name"`
 	Patronymic       *string   `json:"patronymic"`
 	TwoFactorEnabled bool      `json:"two_factor_enabled"`
+	Role             Role      `json:"role"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -47,7 +67,26 @@ func NewUserPreview(u *User) *UserPreview {
 		FirstName:        u.FirstName,
 		Patronymic:       u.Patronymic,
 		TwoFactorEnabled: u.TwoFactorEnabled,
+		Role:             u.Role,
 		CreatedAt:        u.CreatedAt,
+	}
+}
+
+// AdminUserView — пользователь глазами админки: к превью добавлено то, что
+// нужно модератору и не нужно самому пользователю.
+type AdminUserView struct {
+	UserPreview
+	EmailVerified      bool    `json:"email_verified"`
+	MustChangePassword bool    `json:"must_change_password"`
+	CreatedBy          *UserID `json:"created_by"`
+}
+
+func NewAdminUserView(u *User) *AdminUserView {
+	return &AdminUserView{
+		UserPreview:        *NewUserPreview(u),
+		EmailVerified:      u.EmailVerified(),
+		MustChangePassword: u.MustChangePassword,
+		CreatedBy:          u.CreatedBy,
 	}
 }
 

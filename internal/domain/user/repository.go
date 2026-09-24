@@ -29,7 +29,15 @@ type Repository interface {
 	PurgeDeletedUsers(ctx context.Context, before time.Time) (int64, error)
 	MarkEmailVerified(ctx context.Context, id UserID) error
 	SetTwoFactorEnabled(ctx context.Context, id UserID, enabled bool) error
+	// UpdatePassword заодно снимает MustChangePassword: любой пароль,
+	// заданный самим владельцем, временным уже не является.
 	UpdatePassword(ctx context.Context, id UserID, passwordHash string) error
+	// ListUsers — живые аккаунты для админки, свежие сначала, и общее число
+	// подходящих под фильтр.
+	ListUsers(ctx context.Context, f ListUsersFilter) ([]*User, int, error)
+	// PromoteModerators выдаёт роль модератора живым аккаунтам с этими
+	// адресами и возвращает, сколько строк изменилось.
+	PromoteModerators(ctx context.Context, emails []string) (int64, error)
 
 	// IssueAuthCode гасит предыдущий живой код той же пары
 	// (пользователь, назначение) и записывает новый.

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,24 +52,37 @@ func (f *fakeRepo) Upsert(_ context.Context, dto user.CreateDTO) (*user.User, er
 		if u.EmailVerified() {
 			return nil, user.ErrEmailTaken
 		}
-		u.LastName, u.FirstName, u.Patronymic = dto.LastName, dto.FirstName, dto.Patronymic
-		u.PasswordHash = dto.PasswordHash
+		f.applyCreate(u, dto)
 		u.UpdatedAt = f.now()
 		return cloneUser(u), nil
 	}
 
 	u := &user.User{
-		ID:           f.nextID("user"),
-		Email:        dto.Email,
-		PasswordHash: dto.PasswordHash,
-		LastName:     dto.LastName,
-		FirstName:    dto.FirstName,
-		Patronymic:   dto.Patronymic,
-		CreatedAt:    f.now(),
-		UpdatedAt:    f.now(),
+		ID:        f.nextID("user"),
+		Email:     dto.Email,
+		CreatedAt: f.now(),
+		UpdatedAt: f.now(),
 	}
+	f.applyCreate(u, dto)
 	f.users[u.ID] = u
 	return cloneUser(u), nil
+}
+
+// applyCreate повторяет DO UPDATE из SQL: перезапись заявки заменяет всё,
+// включая роль и флаги.
+func (f *fakeRepo) applyCreate(u *user.User, dto user.CreateDTO) {
+	u.LastName, u.FirstName, u.Patronymic = dto.LastName, dto.FirstName, dto.Patronymic
+	u.PasswordHash = dto.PasswordHash
+	u.Role = dto.Role
+	if u.Role == "" {
+		u.Role = user.RoleUser
+	}
+	u.EmailVerifiedAt = nil
+	if dto.EmailVerified {
+		u.EmailVerifiedAt = ptr(f.now())
+	}
+	u.MustChangePassword = dto.MustChangePassword
+	u.CreatedBy = dto.CreatedBy
 }
 
 func (f *fakeRepo) GetByID(_ context.Context, id user.UserID) (*user.User, error) {
@@ -203,8 +218,60 @@ func (f *fakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHas
 		return user.ErrNotFound
 	}
 	u.PasswordHash = passwordHash
+	u.MustChangePassword = false
 	u.UpdatedAt = f.now()
 	return nil
+}
+
+// ListUsers: поиск подстрокой без учёта регистра, свежие сначала — как
+// ORDER BY created_at DESC, id в SQL.
+func (f *fakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*user.User, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q := strings.ToLower(flt.Query)
+	var matched []*user.User
+	for _, u := range f.users {
+		if u.DeletedAt != nil {
+			continue
+		}
+		name := strings.ToLower(strings.Join([]string{u.LastName, u.FirstName, deref(u.Patronymic)}, " "))
+		if strings.Contains(strings.ToLower(u.Email), q) || strings.Contains(name, q) {
+			matched = append(matched, cloneUser(u))
+		}
+	}
+	slices.SortFunc(matched, func(a, b *user.User) int {
+		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+
+	total := len(matched)
+	start := min(flt.Offset, total)
+	end := min(start+flt.Limit, total)
+	return matched[start:end], total, nil
+}
+
+func (f *fakeRepo) PromoteModerators(_ context.Context, emails []string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var n int64
+	for _, u := range f.users {
+		if u.DeletedAt == nil && u.Role != user.RoleModerator && slices.Contains(emails, u.Email) {
+			u.Role = user.RoleModerator
+			n++
+		}
+	}
+	return n, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (f *fakeRepo) SetTwoFactorEnabled(_ context.Context, id user.UserID, enabled bool) error {

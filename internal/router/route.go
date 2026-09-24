@@ -20,7 +20,13 @@ func limit(requests int, window time.Duration) func(http.Handler) http.Handler {
 	return httprate.Limit(requests, window, httprate.WithKeyFuncs(httprate.KeyByRealIP))
 }
 
-func NewRouter(authH *handler.AuthHandler, userH *handler.UserHandler, authMw func(http.Handler) http.Handler) http.Handler {
+func NewRouter(
+	authH *handler.AuthHandler,
+	userH *handler.UserHandler,
+	adminH *handler.AdminHandler,
+	authMw func(http.Handler) http.Handler,
+	moderatorMw func(http.Handler) http.Handler,
+) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
@@ -68,6 +74,9 @@ func NewRouter(authH *handler.AuthHandler, userH *handler.UserHandler, authMw fu
 			r.Route("/password", func(r chi.Router) {
 				r.With(resendLimiter).Post("/forgot", authH.ForgotPassword)
 				r.With(verifyLimiter).Post("/reset", authH.ResetPassword)
+				// Замена временного пароля от модератора: сессии ещё нет,
+				// опознание по email и паролю — лимит как у входа.
+				r.With(loginLimiter).Post("/initial", authH.ChangeInitialPassword)
 				r.With(authMw, loginLimiter).Post("/change", authH.ChangePassword)
 			})
 
@@ -86,8 +95,14 @@ func NewRouter(authH *handler.AuthHandler, userH *handler.UserHandler, authMw fu
 			})
 		})
 
-		// Листинг всех пользователей намеренно не выставлен:
-		// он вернётся только вместе с админским RBAC.
+		// Админка: только для модераторов. Роль проверяется после
+		// аутентификации — moderatorMw берёт личность из контекста authMw.
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(authMw, moderatorMw)
+			r.Get("/users", adminH.ListUsers)
+			r.Post("/users", adminH.CreateUser)
+		})
+
 		r.Route("/users", func(r chi.Router) {
 			r.Use(authMw)
 			r.Get("/{id}", userH.GetUserByID)

@@ -62,11 +62,21 @@ func run() error {
 	codes := service.NewCodeService(repo, mail, cfg.Codes)
 	authSvc := service.NewAuthService(repo, tokens, codes, cfg.Account)
 	userSvc := service.NewUserService(repo, cfg.Account)
+	adminSvc := service.NewAdminService(repo)
+
+	// Не фатально: без этого сервис работает, просто без новых модераторов.
+	if promoted, err := adminSvc.PromoteModerators(ctx, cfg.Account.ModeratorEmails); err != nil {
+		log.Error("promote moderators", slog.Any("error", err))
+	} else if promoted > 0 {
+		log.Info("moderators promoted from MODERATOR_EMAILS", slog.Int64("count", promoted))
+	}
 
 	handlers := router.NewRouter(
 		handler.NewAuthHandler(authSvc, cfg, log),
 		handler.NewUserHandler(userSvc, cfg, log),
+		handler.NewAdminHandler(adminSvc, log),
 		middleware.JWTAuth(authSvc),
+		middleware.RequireModerator(adminSvc, log),
 	)
 
 	go runCleanup(ctx, repo, cfg.Account, log)

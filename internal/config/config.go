@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -92,6 +93,10 @@ type AccountConfig struct {
 	// его на живом сервисе безопасно только в сторону увеличения:
 	// сокращение немедленно делает часть аккаунтов невосстановимыми.
 	RestoreWindow time.Duration
+	// ModeratorEmails получают роль модератора при старте сервиса. Так
+	// заводится первый модератор — назначить его иначе некому. Удаление
+	// адреса из списка роль НЕ снимает.
+	ModeratorEmails []string
 }
 
 func Load() (*Config, error) {
@@ -132,7 +137,8 @@ func Load() (*Config, error) {
 			MaxAttempts:    parseInt("AUTH_CODE_MAX_ATTEMPTS", 5),
 		},
 		Account: AccountConfig{
-			RestoreWindow: parseDuration("ACCOUNT_RESTORE_WINDOW", 365*24*time.Hour),
+			RestoreWindow:   parseDuration("ACCOUNT_RESTORE_WINDOW", 365*24*time.Hour),
+			ModeratorEmails: parseList("MODERATOR_EMAILS"),
 		},
 	}
 
@@ -219,6 +225,17 @@ func parseInt(key string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+// parseList разбирает список через запятую, пропуская пустые элементы.
+func parseList(key string) []string {
+	var out []string
+	for _, v := range strings.Split(os.Getenv(key), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func parseDuration(key string, fallback time.Duration) time.Duration {

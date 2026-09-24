@@ -20,6 +20,12 @@ var (
 	// а не тихий успех: пользователь, меняющий пароль после утечки, должен
 	// узнать, что ничего не изменилось.
 	ErrPasswordUnchanged = errors.New("new password matches the current one")
+	// ErrPasswordChangeRequired: пароль верный, но временный — выдан
+	// модератором. Сессии не будет, пока владелец не задаст свой.
+	ErrPasswordChangeRequired = errors.New("temporary password must be changed")
+	// ErrNoTemporaryPassword: замену временного пароля попросил аккаунт,
+	// у которого пароль уже свой.
+	ErrNoTemporaryPassword = errors.New("password is not temporary")
 )
 
 // Ошибки удалённого аккаунта. Отдаются только тому, кто предъявил верный
