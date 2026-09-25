@@ -39,7 +39,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusCreated, map[string]any{
+	writeData(w, r, http.StatusCreated, map[string]any{
 		"user":         result.User,
 		"verification": result.Challenge,
 	})
@@ -59,7 +59,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.SetSessionCookies(w, result.Tokens)
-	writeData(w, http.StatusOK, map[string]any{"user": result.User})
+	writeData(w, r, http.StatusOK, map[string]any{"user": result.User})
 }
 
 // ResendCode отвечает одинаково для известного и неизвестного адреса —
@@ -76,7 +76,7 @@ func (h *AuthHandler) ResendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+	writeData(w, r, http.StatusAccepted, map[string]any{"verification": challenge})
 }
 
 // Login отвечает одной из двух форм: либо сессия открыта, либо требуется
@@ -94,7 +94,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeLoginResult(w, result)
+	h.writeLoginResult(w, r, result)
 }
 
 // ChangeInitialPassword — замена временного пароля. Отвечает так же, как
@@ -111,13 +111,13 @@ func (h *AuthHandler) ChangeInitialPassword(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.writeLoginResult(w, result)
+	h.writeLoginResult(w, r, result)
 }
 
-func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, result *auth.LoginResult) {
+func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, r *http.Request, result *auth.LoginResult) {
 	if result.MFARequired() {
 		h.cookies.SetMFACookie(w, result.MFAToken)
-		writeData(w, http.StatusOK, map[string]any{
+		writeData(w, r, http.StatusOK, map[string]any{
 			"mfa_required": true,
 			"verification": result.Challenge,
 		})
@@ -125,7 +125,7 @@ func (h *AuthHandler) writeLoginResult(w http.ResponseWriter, result *auth.Login
 	}
 
 	h.cookies.SetSessionCookies(w, result.Tokens)
-	writeData(w, http.StatusOK, map[string]any{
+	writeData(w, r, http.StatusOK, map[string]any{
 		"mfa_required": false,
 		"user":         result.User,
 	})
@@ -150,7 +150,7 @@ func (h *AuthHandler) VerifyMFA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.SetSessionCookies(w, result.Tokens)
-	writeData(w, http.StatusOK, map[string]any{"user": result.User})
+	writeData(w, r, http.StatusOK, map[string]any{"user": result.User})
 }
 
 func (h *AuthHandler) ResendMFA(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +168,7 @@ func (h *AuthHandler) ResendMFA(w http.ResponseWriter, r *http.Request) {
 
 	// Окно на ввод кода продлевается вместе с самим кодом.
 	h.cookies.SetMFACookie(w, refreshed)
-	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+	writeData(w, r, http.StatusAccepted, map[string]any{"verification": challenge})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +185,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.SetSessionCookies(w, tokens)
-	writeData(w, http.StatusOK, map[string]string{"message": "ok"})
+	writeData(w, r, http.StatusOK, map[string]string{"message": "ok"})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +197,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.ClearSessionCookies(w)
-	writeData(w, http.StatusOK, map[string]string{"message": "logged out successfully"})
+	writeData(w, r, http.StatusOK, map[string]string{"message": "logged out successfully"})
 }
 
 // Validate — ответ на auth_request гейтвея, который дёргает его на КАЖДЫЙ
@@ -236,7 +236,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	// остались бы без X-User-Id.
 	w.Header().Set("X-User-Id", u.ID)
 	w.Header().Set("X-User-Roles", string(u.Role))
-	writeData(w, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
+	writeData(w, r, http.StatusOK, map[string]any{"user": user.NewUserPreview(u)})
 }
 
 // RestoreAccount возвращает удалённый аккаунт владельцу. Сессию не открывает:
@@ -254,7 +254,7 @@ func (h *AuthHandler) RestoreAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusOK, map[string]any{"user": u})
+	writeData(w, r, http.StatusOK, map[string]any{"user": u})
 }
 
 // ---- пароль ----
@@ -273,7 +273,7 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+	writeData(w, r, http.StatusAccepted, map[string]any{"verification": challenge})
 }
 
 // ResetPassword намеренно не открывает сессию: после смены пароля нужно
@@ -292,7 +292,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	// Refresh-токены отозваны все до одного, так что куки на этом клиенте
 	// (если он всё же был залогинен) уже ничего не стоят.
 	h.cookies.ClearSessionCookies(w)
-	writeData(w, http.StatusOK, map[string]string{"message": "password changed"})
+	writeData(w, r, http.StatusOK, map[string]string{"message": "password changed"})
 }
 
 // ChangePassword выдаёт новую пару токенов: старая отозвана вместе со всеми
@@ -315,7 +315,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.SetSessionCookies(w, result.Tokens)
-	writeData(w, http.StatusOK, map[string]any{"user": result.User})
+	writeData(w, r, http.StatusOK, map[string]any{"user": result.User})
 }
 
 // ---- управление вторым фактором ----
@@ -337,7 +337,7 @@ func (h *AuthHandler) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusAccepted, map[string]any{"verification": challenge})
+	writeData(w, r, http.StatusAccepted, map[string]any{"verification": challenge})
 }
 
 func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +357,7 @@ func (h *AuthHandler) ConfirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusOK, map[string]any{"user": u})
+	writeData(w, r, http.StatusOK, map[string]any{"user": u})
 }
 
 func (h *AuthHandler) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
@@ -377,5 +377,5 @@ func (h *AuthHandler) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusOK, map[string]any{"user": u})
+	writeData(w, r, http.StatusOK, map[string]any{"user": u})
 }

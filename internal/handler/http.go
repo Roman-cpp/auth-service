@@ -12,8 +12,8 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
+	"github.com/krypton/auth-service/internal/platform/httpx"
 	"github.com/krypton/auth-service/internal/service/otp"
-	"github.com/krypton/auth-service/pkg/httputil"
 )
 
 // maxRequestBody: тела запросов здесь — короткий JSON, поэтому вход
@@ -81,21 +81,21 @@ func (b base) fail(w http.ResponseWriter, r *http.Request, op string, err error)
 				b.log.ErrorContext(r.Context(), "request failed",
 					slog.String("op", op), slog.String("code", m.api.code), slog.Any("error", err))
 			}
-			writeError(w, m.api)
+			writeError(w, r, m.api)
 			return
 		}
 	}
 
 	b.log.ErrorContext(r.Context(), "unhandled error", slog.String("op", op), slog.Any("error", err))
-	writeError(w, apiError{http.StatusInternalServerError, "internal_error", "внутренняя ошибка сервера"})
+	writeError(w, r, apiError{http.StatusInternalServerError, "internal_error", "внутренняя ошибка сервера"})
 }
 
-func writeError(w http.ResponseWriter, e apiError) {
-	httputil.WriteJSON(w, e.status, httputil.ErrorResponse{Code: e.code, Message: e.message})
+func writeError(w http.ResponseWriter, r *http.Request, e apiError) {
+	httpx.WriteError(w, r, e.status, httpx.ErrorBody{Code: e.code, Message: e.message})
 }
 
-func writeData(w http.ResponseWriter, status int, data any) {
-	httputil.WriteJSON(w, status, httputil.Response{Data: data})
+func writeData(w http.ResponseWriter, r *http.Request, status int, data any) {
+	httpx.WriteData(w, r, status, data)
 }
 
 // decodeJSON читает и валидирует тело запроса. Возвращает false, если ответ
@@ -105,11 +105,11 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (*T, bool) {
 
 	var req T
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, apiError{http.StatusBadRequest, "bad_request", "не удалось разобрать тело запроса"})
+		writeError(w, r, apiError{http.StatusBadRequest, "bad_request", "не удалось разобрать тело запроса"})
 		return nil, false
 	}
 	if err := validate.Struct(&req); err != nil {
-		writeError(w, apiError{http.StatusBadRequest, "validation_failed", validationMessage(err)})
+		writeError(w, r, apiError{http.StatusBadRequest, "validation_failed", validationMessage(err)})
 		return nil, false
 	}
 	return &req, true

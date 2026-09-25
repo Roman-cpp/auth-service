@@ -8,7 +8,7 @@ import (
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	authctx "github.com/krypton/auth-service/internal/platform/auth"
-	"github.com/krypton/auth-service/pkg/httputil"
+	"github.com/krypton/auth-service/internal/platform/httpx"
 )
 
 // TokenValidator и RevocationChecker — ровно то, что middleware нужно от
@@ -32,7 +32,7 @@ func JWTAuth(v TokenValidator, revocations RevocationChecker, log *slog.Logger) 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractToken(r)
 			if token == "" {
-				unauthorized(w, "требуется авторизация")
+				unauthorized(w, r, "требуется авторизация")
 				return
 			}
 
@@ -40,7 +40,7 @@ func JWTAuth(v TokenValidator, revocations RevocationChecker, log *slog.Logger) 
 			// он подписан тем же ключом, но имеет другой тип.
 			claims, err := v.ValidateAccessToken(token)
 			if err != nil {
-				unauthorized(w, "сессия недействительна или истекла")
+				unauthorized(w, r, "сессия недействительна или истекла")
 				return
 			}
 
@@ -48,11 +48,11 @@ func JWTAuth(v TokenValidator, revocations RevocationChecker, log *slog.Logger) 
 			case errors.Is(err, auth.ErrInvalidToken):
 				// Отозван. 401, а не 403: клиент сделает refresh и получит
 				// токен с актуальной ролью — или отказ, если аккаунта нет.
-				unauthorized(w, "сессия недействительна или истекла")
+				unauthorized(w, r, "сессия недействительна или истекла")
 				return
 			case err != nil:
 				log.ErrorContext(r.Context(), "authn: revocation check", slog.Any("error", err))
-				httputil.WriteJSON(w, http.StatusServiceUnavailable, httputil.ErrorResponse{
+				httpx.WriteError(w, r, http.StatusServiceUnavailable, httpx.ErrorBody{
 					Code:    "unavailable",
 					Message: "сервис временно недоступен",
 				})
@@ -68,8 +68,8 @@ func JWTAuth(v TokenValidator, revocations RevocationChecker, log *slog.Logger) 
 	}
 }
 
-func unauthorized(w http.ResponseWriter, message string) {
-	httputil.WriteJSON(w, http.StatusUnauthorized, httputil.ErrorResponse{
+func unauthorized(w http.ResponseWriter, r *http.Request, message string) {
+	httpx.WriteError(w, r, http.StatusUnauthorized, httpx.ErrorBody{
 		Code:    "unauthorized",
 		Message: message,
 	})

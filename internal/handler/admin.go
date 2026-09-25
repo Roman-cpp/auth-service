@@ -39,7 +39,7 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusOK, map[string]any{"users": users, "total": total})
+	writeData(w, r, http.StatusOK, map[string]any{"users": users, "total": total})
 }
 
 func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
@@ -66,5 +66,5 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		slog.String("user_id", result.User.ID),
 		slog.String("role", string(result.User.Role)),
 	)
-	writeData(w, http.StatusCreated, result)
+	writeData(w, r, http.StatusCreated, result)
 }

@@ -28,7 +28,7 @@ func requireSelf(w http.ResponseWriter, r *http.Request) (user.UserID, bool) {
 	id := chi.URLParam(r, "id")
 	authID, ok := authctx.UserIDFrom(r.Context())
 	if !ok || authID != id {
-		writeError(w, apiError{http.StatusForbidden, "forbidden", "доступ запрещён"})
+		writeError(w, r, apiError{http.StatusForbidden, "forbidden", "доступ запрещён"})
 		return "", false
 	}
 	return id, true
@@ -46,7 +46,7 @@ func (h *UserHandler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusOK, user.NewUserPreview(u))
+	writeData(w, r, http.StatusOK, user.NewUserPreview(u))
 }
 
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -65,5 +65,5 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	h.cookies.ClearSessionCookies(w)
 	// Не 204: срок, до которого аккаунт можно вернуть, клиенту нужно
 	// показать сразу — другого места узнать его у пользователя нет.
-	writeData(w, http.StatusOK, map[string]any{"restore_available_until": restoreUntil})
+	writeData(w, r, http.StatusOK, map[string]any{"restore_available_until": restoreUntil})
 }
