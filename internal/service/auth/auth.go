@@ -11,8 +11,8 @@ import (
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/mailer"
+	"github.com/krypton/auth-service/internal/platform/passhash"
 	"github.com/krypton/auth-service/internal/service/otp"
-	"github.com/krypton/auth-service/internal/service/passhash"
 	"github.com/krypton/auth-service/internal/service/token"
 	"golang.org/x/crypto/bcrypt"
 )

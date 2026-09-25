@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/service/passhash"
+	"github.com/krypton/auth-service/internal/platform/passhash"
 )
 
 const (
