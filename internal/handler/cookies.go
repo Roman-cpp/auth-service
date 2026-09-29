@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/auth"
@@ -11,6 +12,7 @@ const (
 	accessTokenCookie  = "access_token"
 	refreshTokenCookie = "refresh_token"
 	mfaTokenCookie     = "mfa_token"
+	qrLoginCookie      = "qr_login"
 )
 
 type CookieManager struct {
@@ -50,8 +52,10 @@ func (cm *CookieManager) SetSessionCookies(w http.ResponseWriter, tokens *auth.T
 	http.SetCookie(w, cm.cookie(accessTokenCookie, tokens.AccessToken, "/", int(tokens.ExpiresIn)))
 	http.SetCookie(w, cm.cookie(refreshTokenCookie, tokens.RefreshToken, cm.refreshTokenPath(),
 		int(cm.cfg.JWT.RefreshTokenTTL.Seconds())))
-	// Сессия открыта — промежуточная кука второго шага больше не нужна.
+	// Сессия открыта — промежуточные куки второго шага и QR-входа больше
+	// не нужны.
 	cm.ClearMFACookie(w)
+	cm.ClearQRCookie(w)
 }
 
 func (cm *CookieManager) ClearSessionCookies(w http.ResponseWriter) {
@@ -69,6 +73,23 @@ func (cm *CookieManager) SetMFACookie(w http.ResponseWriter, token string) {
 
 func (cm *CookieManager) ClearMFACookie(w http.ResponseWriter) {
 	http.SetCookie(w, cm.cookie(mfaTokenCookie, "", cm.mfaTokenPath(), -1))
+}
+
+// QR-кука нужна только компьютеру, ждущему подтверждения, — и только
+// эндпоинтам /auth/qr.
+func (cm *CookieManager) qrLoginPath() string {
+	return cm.cfg.JWT.CookiePathPrefix + "/v1/auth/qr"
+}
+
+// SetQRCookie хранит секрет заявки на вход по QR. В теле ответа его нет по
+// той же причине, что и MFA-токена: JS он не нужен, а XSS его не достанет.
+func (cm *CookieManager) SetQRCookie(w http.ResponseWriter, secret string, expiresAt time.Time) {
+	http.SetCookie(w, cm.cookie(qrLoginCookie, secret, cm.qrLoginPath(),
+		int(time.Until(expiresAt).Seconds())))
+}
+
+func (cm *CookieManager) ClearQRCookie(w http.ResponseWriter) {
+	http.SetCookie(w, cm.cookie(qrLoginCookie, "", cm.qrLoginPath(), -1))
 }
 
 func cookieValue(r *http.Request, name string) string {

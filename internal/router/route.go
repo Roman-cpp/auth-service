@@ -25,6 +25,7 @@ type Handlers struct {
 	Auth  *handler.AuthHandler
 	User  *handler.UserHandler
 	Admin *handler.AdminHandler
+	QR    *handler.QRHandler
 }
 
 // Middleware — middleware доступа. Authn кладёт личность в контекст,
@@ -55,6 +56,9 @@ func NewRouter(h Handlers, mw Middleware) http.Handler {
 		verifyLimiter  = limit(20, time.Minute)
 		resendLimiter  = limit(5, time.Minute)
 		refreshLimiter = limit(30, time.Minute)
+		// Поток статусов QR-входа: один на экран входа, плюс переподключения
+		// браузера и новые QR каждые пару минут.
+		qrEventsLimiter = limit(30, time.Minute)
 	)
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -75,6 +79,21 @@ func NewRouter(h Handlers, mw Middleware) http.Handler {
 			r.Route("/mfa", func(r chi.Router) {
 				r.With(verifyLimiter).Post("/verify", h.Auth.VerifyMFA)
 				r.With(resendLimiter).Post("/resend", h.Auth.ResendMFA)
+			})
+
+			// Вход по QR-коду. Компьютер без сессии опознаётся по qr_login-куке
+			// (start, events, complete); телефон — по своей сессии.
+			r.Route("/qr", func(r chi.Router) {
+				r.With(loginLimiter).Post("/start", h.QR.Start)
+				r.With(qrEventsLimiter).Get("/events", h.QR.Events)
+				r.With(loginLimiter).Post("/complete", h.QR.Complete)
+
+				r.Group(func(r chi.Router) {
+					r.Use(mw.Authn, verifyLimiter)
+					r.Post("/{id}/scan", h.QR.Scan)
+					r.Post("/{id}/approve", h.QR.Approve)
+					r.Post("/{id}/reject", h.QR.Reject)
+				})
 			})
 
 			// Все три маршрута про пароль держатся вместе, хотя защищены

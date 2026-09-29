@@ -18,6 +18,7 @@ type Config struct {
 	SMTP     SMTPConfig
 	Codes    CodesConfig
 	Account  AccountConfig
+	QRLogin  QRLoginConfig
 }
 
 type ServiceConfig struct {
@@ -99,6 +100,12 @@ type AccountConfig struct {
 	ModeratorEmails []string
 }
 
+type QRLoginConfig struct {
+	// TTL — сколько живёт QR-код на экране. Коротко намеренно: чем дольше
+	// код валиден, тем больше времени у того, кто подсунул его жертве.
+	TTL time.Duration
+}
+
 func Load() (*Config, error) {
 	// .env не обязателен (можно задавать переменные окружения напрямую)
 	_ = godotenv.Load()
@@ -140,6 +147,9 @@ func Load() (*Config, error) {
 			RestoreWindow:   parseDuration("ACCOUNT_RESTORE_WINDOW", 365*24*time.Hour),
 			ModeratorEmails: parseList("MODERATOR_EMAILS"),
 		},
+		QRLogin: QRLoginConfig{
+			TTL: parseDuration("AUTH_QR_TTL", 2*time.Minute),
+		},
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -177,6 +187,12 @@ func (c *Config) validate() error {
 	// Такой режим нужно вводить осознанно, а не опечаткой в переменной.
 	if c.Account.RestoreWindow <= 0 {
 		return fmt.Errorf("ACCOUNT_RESTORE_WINDOW must be positive, got %s", c.Account.RestoreWindow)
+	}
+	// Верхняя граница — та же, что у одноразового кода: QR, который живёт
+	// дольше, опаснее кода из письма, а удобнее не становится.
+	if c.QRLogin.TTL <= 0 || c.QRLogin.TTL > c.Codes.TTL {
+		return fmt.Errorf("AUTH_QR_TTL must be positive and not exceed AUTH_CODE_TTL (%s), got %s",
+			c.Codes.TTL, c.QRLogin.TTL)
 	}
 	return nil
 }

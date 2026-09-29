@@ -24,6 +24,7 @@ type FakeRepo struct {
 	users   map[user.UserID]*user.User
 	codes   map[string]*auth.AuthCode
 	refresh map[string]*auth.RefreshToken
+	qr      map[string]*auth.QRLogin
 	// revoked повторяет таблицу token_revocations, которую в базе ведёт триггер.
 	revoked  map[user.UserID]int64
 	nowFunc  func() time.Time
@@ -35,6 +36,7 @@ func NewFakeRepo() *FakeRepo {
 		users:   map[user.UserID]*user.User{},
 		codes:   map[string]*auth.AuthCode{},
 		refresh: map[string]*auth.RefreshToken{},
+		qr:      map[string]*auth.QRLogin{},
 		revoked: map[user.UserID]int64{},
 		nowFunc: time.Now,
 	}
@@ -201,6 +203,11 @@ func (f *FakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64
 		for hash, rt := range f.refresh {
 			if rt.UserID == id {
 				delete(f.refresh, hash)
+			}
+		}
+		for qrID, q := range f.qr {
+			if q.UserID != nil && *q.UserID == id {
+				delete(f.qr, qrID)
 			}
 		}
 	}
@@ -479,6 +486,126 @@ func (f *FakeRepo) DeleteExpiredRefreshTokens(_ context.Context) error {
 	return nil
 }
 
+func (f *FakeRepo) CreateQRLogin(_ context.Context, secretHash, ip, userAgent string, expiresAt time.Time) (*auth.QRLogin, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q := &auth.QRLogin{
+		ID:          f.nextID("qr"),
+		SecretHash:  secretHash,
+		Status:      auth.QRLoginPending,
+		RequesterIP: ip,
+		RequesterUA: userAgent,
+		ExpiresAt:   expiresAt,
+		CreatedAt:   f.now(),
+	}
+	f.qr[q.ID] = q
+	return cloneQR(q), nil
+}
+
+func (f *FakeRepo) GetQRLogin(_ context.Context, id string) (*auth.QRLogin, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q, ok := f.qr[id]
+	if !ok {
+		return nil, user.ErrNotFound
+	}
+	return cloneQR(q), nil
+}
+
+func (f *FakeRepo) GetQRLoginBySecret(_ context.Context, secretHash string) (*auth.QRLogin, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if q := f.qrBySecret(secretHash); q != nil {
+		return cloneQR(q), nil
+	}
+	return nil, user.ErrNotFound
+}
+
+func (f *FakeRepo) ScanQRLogin(_ context.Context, id string, userID user.UserID) (*auth.QRLogin, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q, ok := f.qr[id]
+	if !ok || q.Expired(f.now()) {
+		return nil, user.ErrNotFound
+	}
+	rescan := q.Status == auth.QRLoginScanned && q.UserID != nil && *q.UserID == userID
+	if q.Status != auth.QRLoginPending && !rescan {
+		return nil, user.ErrNotFound
+	}
+	q.Status = auth.QRLoginScanned
+	q.UserID = &userID
+	return cloneQR(q), nil
+}
+
+func (f *FakeRepo) ApproveQRLogin(_ context.Context, id string, userID user.UserID, completeBy time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q, ok := f.qr[id]
+	if !ok || !f.scannedBy(q, userID) {
+		return user.ErrNotFound
+	}
+	q.Status = auth.QRLoginApproved
+	if completeBy.After(q.ExpiresAt) {
+		q.ExpiresAt = completeBy
+	}
+	return nil
+}
+
+func (f *FakeRepo) RejectQRLogin(_ context.Context, id string, userID user.UserID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q, ok := f.qr[id]
+	if !ok || !f.scannedBy(q, userID) {
+		return user.ErrNotFound
+	}
+	q.Status = auth.QRLoginRejected
+	return nil
+}
+
+func (f *FakeRepo) ConsumeQRLogin(_ context.Context, secretHash string) (user.UserID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	q := f.qrBySecret(secretHash)
+	if q == nil || q.Status != auth.QRLoginApproved || q.Expired(f.now()) {
+		return "", user.ErrNotFound
+	}
+	q.Status = auth.QRLoginConsumed
+	return *q.UserID, nil
+}
+
+func (f *FakeRepo) DeleteExpiredQRLogins(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for id, q := range f.qr {
+		if q.Expired(f.now()) {
+			delete(f.qr, id)
+		}
+	}
+	return nil
+}
+
+// qrBySecret и scannedBy вызываются под f.mu.
+func (f *FakeRepo) qrBySecret(secretHash string) *auth.QRLogin {
+	for _, q := range f.qr {
+		if q.SecretHash == secretHash {
+			return q
+		}
+	}
+	return nil
+}
+
+func (f *FakeRepo) scannedBy(q *auth.QRLogin, userID user.UserID) bool {
+	return q.Status == auth.QRLoginScanned && q.UserID != nil && *q.UserID == userID && !q.Expired(f.now())
+}
+
 // Копии наружу: иначе тест случайно поправит состояние «базы» через
 // возвращённый указатель, чего настоящий репозиторий не позволяет.
 func cloneUser(u *user.User) *user.User {
@@ -488,6 +615,14 @@ func cloneUser(u *user.User) *user.User {
 
 func cloneCode(c *auth.AuthCode) *auth.AuthCode {
 	clone := *c
+	return &clone
+}
+
+func cloneQR(q *auth.QRLogin) *auth.QRLogin {
+	clone := *q
+	if q.UserID != nil {
+		clone.UserID = ptr(*q.UserID)
+	}
 	return &clone
 }
 
