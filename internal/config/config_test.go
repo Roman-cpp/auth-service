@@ -19,6 +19,7 @@ func validConfig() *Config {
 			MaxAttempts:    5,
 		},
 		Account: AccountConfig{RestoreWindow: 365 * 24 * time.Hour},
+		QRLogin: QRLoginConfig{TTL: 2 * time.Minute},
 	}
 }
 
@@ -75,6 +76,17 @@ func TestValidateRejectsNonPositiveRestoreWindow(t *testing.T) {
 
 	if err := cfg.validate(); err == nil {
 		t.Fatal("zero ACCOUNT_RESTORE_WINDOW accepted")
+	}
+}
+
+func TestValidateRejectsBadQRTTL(t *testing.T) {
+	for _, ttl := range []time.Duration{0, time.Hour} {
+		cfg := validConfig()
+		cfg.QRLogin.TTL = ttl
+
+		if err := cfg.validate(); err == nil {
+			t.Fatalf("AUTH_QR_TTL=%s accepted", ttl)
+		}
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/krypton/auth-service/internal/service/admin"
 	"github.com/krypton/auth-service/internal/service/auth"
 	"github.com/krypton/auth-service/internal/service/otp"
+	"github.com/krypton/auth-service/internal/service/qrlogin"
 	"github.com/krypton/auth-service/internal/service/revocation"
 	"github.com/krypton/auth-service/internal/service/token"
 	"github.com/krypton/auth-service/internal/service/user"
@@ -72,6 +73,7 @@ func run() error {
 	authSvc := auth.NewService(repo, sessions, tokens, codes, revocations, cfg.Account)
 	userSvc := user.NewService(repo, sessions, revocations, cfg.Account)
 	adminSvc := admin.NewService(repo)
+	qrSvc := qrlogin.NewService(sessions, repo, tokens, cfg.QRLogin)
 
 	// Не фатально: без этого сервис работает, просто без новых модераторов.
 	if promoted, err := adminSvc.PromoteModerators(ctx, cfg.Account.ModeratorEmails); err != nil {
@@ -91,6 +93,7 @@ func run() error {
 		Auth:  handler.NewAuthHandler(authSvc, cfg, log),
 		User:  handler.NewUserHandler(userSvc, cfg, log),
 		Admin: handler.NewAdminHandler(adminSvc, log),
+		QR:    handler.NewQRHandler(qrSvc, cfg, log),
 	}
 	middleware := router.Middleware{
 		Authn:            authn.JWTAuth(authSvc, revocations, log),
@@ -149,9 +152,10 @@ func newLogger(cfg config.ServiceConfig) *slog.Logger {
 	return slog.New(h).With(slog.String("service", cfg.Name))
 }
 
-// runCleanup убирает протухшие refresh-токены и одноразовые коды, а также
-// аккаунты, у которых кончилось окно восстановления. Первые две таблицы
-// растут при каждом входе, и без уборки чистятся только вручную.
+// runCleanup убирает протухшие refresh-токены, одноразовые коды и заявки
+// на вход по QR, а также аккаунты, у которых кончилось окно восстановления.
+// Первые три таблицы растут при каждом входе, и без уборки чистятся только
+// вручную.
 func runCleanup(
 	ctx context.Context,
 	repo *repository.UserRepository,
@@ -172,6 +176,9 @@ func runCleanup(
 			}
 			if err := sessions.DeleteExpiredAuthCodes(ctx); err != nil {
 				log.Error("cleanup auth codes", slog.Any("error", err))
+			}
+			if err := sessions.DeleteExpiredQRLogins(ctx); err != nil {
+				log.Error("cleanup qr logins", slog.Any("error", err))
 			}
 			// Запись об отзыве нужна, пока жив хоть один токен со старой
 			// версией, — не дольше TTL access-токена. Запас — на случай,

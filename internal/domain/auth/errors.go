@@ -32,3 +32,13 @@ var (
 	ErrCodeAttempts  = errors.New("too many invalid attempts")
 	ErrResendTooSoon = errors.New("confirmation code was requested too recently")
 )
+
+// Ошибки входа по QR-коду.
+var (
+	// ErrQRLoginExpired: заявки нет, её срок вышел или она уже погашена.
+	// Для клиента это одно и то же — нужен новый QR.
+	ErrQRLoginExpired = errors.New("qr login request is expired")
+	// ErrQRLoginState: заявка жива, но не в том состоянии — например, её
+	// уже отсканировал другой аккаунт или подтверждают без сканирования.
+	ErrQRLoginState = errors.New("qr login request is in a wrong state")
+)

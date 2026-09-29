@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -186,5 +187,103 @@ func (r *AuthRepository) TokenRevocations(ctx context.Context) (map[user.UserID]
 
 func (r *AuthRepository) DeleteStaleTokenRevocations(ctx context.Context, before time.Time) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM token_revocations WHERE changed_at < $1`, before)
+	return err
+}
+
+// ---- вход по QR-коду ----
+
+// id заявки приходит из URL, то есть от кого угодно. Не-UUID в колонку
+// типа UUID Postgres отвергает ошибкой, и без проверки мусорный id давал бы
+// 500 вместо «заявки нет».
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+const qrLoginColumns = `id, secret_hash, status, user_id, requester_ip, requester_ua, expires_at, created_at`
+
+func scanQRLogin(row rowScanner) (*auth.QRLogin, error) {
+	q := &auth.QRLogin{}
+	err := row.Scan(
+		&q.ID, &q.SecretHash, &q.Status, &q.UserID,
+		&q.RequesterIP, &q.RequesterUA, &q.ExpiresAt, &q.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, user.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+func (r *AuthRepository) CreateQRLogin(ctx context.Context, secretHash, ip, userAgent string, expiresAt time.Time) (*auth.QRLogin, error) {
+	return scanQRLogin(r.pool.QueryRow(ctx,
+		`INSERT INTO qr_logins (secret_hash, requester_ip, requester_ua, expires_at)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING `+qrLoginColumns,
+		secretHash, ip, userAgent, expiresAt,
+	))
+}
+
+func (r *AuthRepository) GetQRLogin(ctx context.Context, id string) (*auth.QRLogin, error) {
+	if !uuidPattern.MatchString(id) {
+		return nil, user.ErrNotFound
+	}
+	return scanQRLogin(r.pool.QueryRow(ctx,
+		`SELECT `+qrLoginColumns+` FROM qr_logins WHERE id = $1`, id))
+}
+
+func (r *AuthRepository) GetQRLoginBySecret(ctx context.Context, secretHash string) (*auth.QRLogin, error) {
+	return scanQRLogin(r.pool.QueryRow(ctx,
+		`SELECT `+qrLoginColumns+` FROM qr_logins WHERE secret_hash = $1`, secretHash))
+}
+
+func (r *AuthRepository) ScanQRLogin(ctx context.Context, id string, userID user.UserID) (*auth.QRLogin, error) {
+	if !uuidPattern.MatchString(id) {
+		return nil, user.ErrNotFound
+	}
+	return scanQRLogin(r.pool.QueryRow(ctx,
+		`UPDATE qr_logins SET status = 'scanned', user_id = $2
+		  WHERE id = $1 AND expires_at > NOW()
+		    AND (status = 'pending' OR (status = 'scanned' AND user_id = $2))
+		  RETURNING `+qrLoginColumns,
+		id, userID,
+	))
+}
+
+func (r *AuthRepository) ApproveQRLogin(ctx context.Context, id string, userID user.UserID, completeBy time.Time) error {
+	if !uuidPattern.MatchString(id) {
+		return user.ErrNotFound
+	}
+	return execExpectingRow(ctx, r.pool,
+		`UPDATE qr_logins SET status = 'approved', expires_at = GREATEST(expires_at, $3)
+		  WHERE id = $1 AND user_id = $2 AND status = 'scanned' AND expires_at > NOW()`,
+		id, userID, completeBy)
+}
+
+func (r *AuthRepository) RejectQRLogin(ctx context.Context, id string, userID user.UserID) error {
+	if !uuidPattern.MatchString(id) {
+		return user.ErrNotFound
+	}
+	return execExpectingRow(ctx, r.pool,
+		`UPDATE qr_logins SET status = 'rejected'
+		  WHERE id = $1 AND user_id = $2 AND status = 'scanned' AND expires_at > NOW()`,
+		id, userID)
+}
+
+func (r *AuthRepository) ConsumeQRLogin(ctx context.Context, secretHash string) (user.UserID, error) {
+	var userID user.UserID
+	err := r.pool.QueryRow(ctx,
+		`UPDATE qr_logins SET status = 'consumed'
+		  WHERE secret_hash = $1 AND status = 'approved' AND expires_at > NOW()
+		  RETURNING user_id`,
+		secretHash,
+	).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", user.ErrNotFound
+	}
+	return userID, err
+}
+
+func (r *AuthRepository) DeleteExpiredQRLogins(ctx context.Context) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM qr_logins WHERE expires_at < NOW()`)
 	return err
 }

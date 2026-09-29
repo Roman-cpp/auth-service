@@ -35,4 +35,21 @@ type Repository interface {
 	// DeleteStaleTokenRevocations убирает записи старше before: все токены
 	// со старыми версиями к этому моменту уже истекли сами.
 	DeleteStaleTokenRevocations(ctx context.Context, before time.Time) error
+
+	// Заявки на вход по QR-коду. Каждый переход статуса — условный UPDATE:
+	// если заявка не в ожидаемом состоянии или протухла, возвращается
+	// user.ErrNotFound, и параллельные запросы срабатывают ровно один раз.
+	CreateQRLogin(ctx context.Context, secretHash, ip, userAgent string, expiresAt time.Time) (*QRLogin, error)
+	GetQRLogin(ctx context.Context, id string) (*QRLogin, error)
+	GetQRLoginBySecret(ctx context.Context, secretHash string) (*QRLogin, error)
+	// ScanQRLogin закрепляет заявку за userID. Повторное сканирование тем же
+	// пользователем проходит (перезагрузка страницы), другим — нет.
+	ScanQRLogin(ctx context.Context, id string, userID user.UserID) (*QRLogin, error)
+	// ApproveQRLogin продлевает срок до completeBy: компьютер должен успеть
+	// забрать сессию, даже если подтвердили в последнюю секунду.
+	ApproveQRLogin(ctx context.Context, id string, userID user.UserID, completeBy time.Time) error
+	RejectQRLogin(ctx context.Context, id string, userID user.UserID) error
+	// ConsumeQRLogin гасит подтверждённую заявку и возвращает, чья она.
+	ConsumeQRLogin(ctx context.Context, secretHash string) (user.UserID, error)
+	DeleteExpiredQRLogins(ctx context.Context) error
 }

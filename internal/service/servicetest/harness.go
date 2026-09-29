@@ -14,6 +14,7 @@ import (
 	"github.com/krypton/auth-service/internal/mailer"
 	authservice "github.com/krypton/auth-service/internal/service/auth"
 	"github.com/krypton/auth-service/internal/service/otp"
+	"github.com/krypton/auth-service/internal/service/qrlogin"
 	"github.com/krypton/auth-service/internal/service/revocation"
 	"github.com/krypton/auth-service/internal/service/token"
 	userservice "github.com/krypton/auth-service/internal/service/user"
@@ -75,6 +76,7 @@ type Harness struct {
 	Codes   *otp.Service
 	Auth    *authservice.Service
 	Users   *userservice.Service
+	QR      *qrlogin.Service
 	Revoked *revocation.List
 	JWTCfg  config.JWTConfig
 	Account config.AccountConfig
@@ -113,6 +115,7 @@ func New(t *testing.T) *Harness {
 		Codes:   codes,
 		Auth:    authservice.NewService(repo, repo, tokens, codes, revoked, accountCfg),
 		Users:   userservice.NewService(repo, repo, revoked, accountCfg),
+		QR:      qrlogin.NewService(repo, repo, tokens, config.QRLoginConfig{TTL: 2 * time.Minute}),
 		Revoked: revoked,
 		JWTCfg:  jwtCfg,
 		Account: accountCfg,
@@ -186,6 +189,19 @@ func (h *Harness) ExpireCode(t *testing.T, userID user.UserID, purpose auth.Code
 		}
 	}
 	t.Fatalf("no active code for %s/%s", userID, purpose)
+}
+
+// ExpireQRLogin сдвигает срок заявки на вход по QR в прошлое.
+func (h *Harness) ExpireQRLogin(t *testing.T, id string) {
+	t.Helper()
+	h.Repo.mu.Lock()
+	defer h.Repo.mu.Unlock()
+
+	q, ok := h.Repo.qr[id]
+	if !ok {
+		t.Fatalf("no qr login %s", id)
+	}
+	q.ExpiresAt = time.Now().Add(-time.Second)
 }
 
 // PassCooldown отматывает время выдачи кода назад, чтобы не ждать кулдаун
