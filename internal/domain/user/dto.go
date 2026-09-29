@@ -19,11 +19,13 @@ type AdminCreateUserResult struct {
 }
 
 // ListUsersFilter — постраничная выборка для админки. Query ищет по email
-// и ФИО без учёта регистра.
+// и ФИО без учёта регистра. Deleted — логически удалённые аккаунты вместо
+// живых: из них модератор восстанавливает или удаляет навсегда.
 type ListUsersFilter struct {
-	Query  string
-	Limit  int
-	Offset int
+	Query   string
+	Deleted bool
+	Limit   int
+	Offset  int
 }
 
 type CreateDTO struct {

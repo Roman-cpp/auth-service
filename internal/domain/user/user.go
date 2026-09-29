@@ -85,15 +85,28 @@ type AdminUserView struct {
 	EmailVerified      bool    `json:"email_verified"`
 	MustChangePassword bool    `json:"must_change_password"`
 	CreatedBy          *UserID `json:"created_by"`
+	// DeletedAt и RestoreAvailableUntil заполнены только у логически
+	// удалённых: до RestoreAvailableUntil аккаунт можно вернуть, потом его
+	// уносит уборщик.
+	DeletedAt             *time.Time `json:"deleted_at"`
+	RestoreAvailableUntil *time.Time `json:"restore_available_until"`
 }
 
-func NewAdminUserView(u *User) *AdminUserView {
-	return &AdminUserView{
+// NewAdminUserView: restoreWindow нужен, чтобы посчитать срок
+// восстановления удалённого аккаунта; у живого он ни на что не влияет.
+func NewAdminUserView(u *User, restoreWindow time.Duration) *AdminUserView {
+	v := &AdminUserView{
 		UserPreview:        *NewUserPreview(u),
 		EmailVerified:      u.EmailVerified(),
 		MustChangePassword: u.MustChangePassword,
 		CreatedBy:          u.CreatedBy,
+		DeletedAt:          u.DeletedAt,
 	}
+	if u.DeletedAt != nil {
+		until := u.DeletedAt.Add(restoreWindow)
+		v.RestoreAvailableUntil = &until
+	}
+	return v
 }
 
 // NormalizeEmail: без него Foo@example.com и foo@example.com становятся

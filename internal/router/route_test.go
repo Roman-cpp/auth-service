@@ -44,6 +44,9 @@ func TestRouteTable(t *testing.T) {
 		"DELETE /api/v1/users/{id}",
 		"GET /api/v1/admin/users",
 		"POST /api/v1/admin/users",
+		"DELETE /api/v1/admin/users/{id}",
+		"POST /api/v1/admin/users/{id}/restore",
+		"DELETE /api/v1/admin/users/{id}/permanent",
 	}
 	for _, route := range want {
 		if !registered[route] {

@@ -10,7 +10,7 @@ import (
 	"github.com/krypton/auth-service/internal/service/servicetest"
 )
 
-func admin(h *servicetest.Harness) *Service { return NewService(h.Repo) }
+func admin(h *servicetest.Harness) *Service { return NewService(h.Repo, h.Users, h.Account) }
 
 func createByModerator(t *testing.T, h *servicetest.Harness, email string, role user.Role) *user.AdminCreateUserResult {
 	t.Helper()
@@ -172,5 +172,115 @@ func TestListUsersSearchAndPaging(t *testing.T) {
 	_, total, _ = admin(h).ListUsers(t.Context(), user.ListUsersFilter{Limit: 1000})
 	if total != 3 {
 		t.Fatalf("total without query = %d, want 3", total)
+	}
+}
+
+// moderator заводит модератора через MODERATOR_EMAILS — так же, как в main.
+func moderator(t *testing.T, h *servicetest.Harness, email string) *user.User {
+	t.Helper()
+	u := h.RegisterVerified(t, email)
+	if _, err := admin(h).PromoteModerators(t.Context(), []string{email}); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	u.Role = user.RoleModerator
+	return u
+}
+
+func TestModeratorDeletesUserInTwoSteps(t *testing.T) {
+	h := servicetest.New(t)
+	mod := moderator(t, h, "mod@example.com")
+	u := h.RegisterVerified(t, "victim@example.com")
+	svc := admin(h)
+
+	// Навсегда живой аккаунт не удалить — только вторым шагом.
+	if err := svc.PurgeUser(t.Context(), mod.ID, u.ID); !errors.Is(err, user.ErrAccountNotDeleted) {
+		t.Fatalf("purge live account: got %v, want ErrAccountNotDeleted", err)
+	}
+
+	view, err := svc.DeleteUser(t.Context(), mod.ID, u.ID)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if view.DeletedAt == nil || view.RestoreAvailableUntil == nil {
+		t.Fatalf("deleted view without dates: %+v", view)
+	}
+	// Сессии удалённого погашены, войти он не может.
+	if _, err := h.Auth.Login(t.Context(), &auth.Login{Email: u.Email, Password: servicetest.Password}); !errors.Is(err, user.ErrAccountDeleted) {
+		t.Fatalf("login after delete: got %v, want ErrAccountDeleted", err)
+	}
+
+	live, _, _ := svc.ListUsers(t.Context(), user.ListUsersFilter{})
+	deleted, _, _ := svc.ListUsers(t.Context(), user.ListUsersFilter{Deleted: true})
+	if len(live) != 1 || len(deleted) != 1 || deleted[0].ID != u.ID {
+		t.Fatalf("lists after delete: live=%d deleted=%d", len(live), len(deleted))
+	}
+
+	if err := svc.PurgeUser(t.Context(), mod.ID, u.ID); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := h.Repo.GetByIDWithDeleted(t.Context(), u.ID); !errors.Is(err, user.ErrNotFound) {
+		t.Fatalf("purged account still exists: %v", err)
+	}
+	// Удалённый навсегда не восстанавливается.
+	if _, err := svc.RestoreUser(t.Context(), u.ID); !errors.Is(err, user.ErrNotFound) {
+		t.Fatalf("restore purged: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestModeratorRestoresDeletedUser(t *testing.T) {
+	h := servicetest.New(t)
+	mod := moderator(t, h, "mod@example.com")
+	u := h.RegisterVerified(t, "back@example.com")
+	svc := admin(h)
+
+	if _, err := svc.RestoreUser(t.Context(), u.ID); !errors.Is(err, user.ErrAccountNotDeleted) {
+		t.Fatalf("restore live: got %v, want ErrAccountNotDeleted", err)
+	}
+	if _, err := svc.DeleteUser(t.Context(), mod.ID, u.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	view, err := svc.RestoreUser(t.Context(), u.ID)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if view.DeletedAt != nil || view.RestoreAvailableUntil != nil {
+		t.Fatalf("restored view still deleted: %+v", view)
+	}
+	h.Login(t, u.Email, servicetest.Password)
+}
+
+func TestModeratorCannotRestoreAfterWindow(t *testing.T) {
+	h := servicetest.New(t)
+	mod := moderator(t, h, "mod@example.com")
+	u := h.RegisterVerified(t, "late@example.com")
+	svc := admin(h)
+
+	if _, err := svc.DeleteUser(t.Context(), mod.ID, u.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	h.AgeDeletion(t, u.ID, h.Account.RestoreWindow)
+
+	if _, err := svc.RestoreUser(t.Context(), u.ID); !errors.Is(err, user.ErrRestoreExpired) {
+		t.Fatalf("got %v, want ErrRestoreExpired", err)
+	}
+}
+
+func TestModeratorCannotDeleteSelfOrModerators(t *testing.T) {
+	h := servicetest.New(t)
+	mod := moderator(t, h, "mod@example.com")
+	other := moderator(t, h, "other-mod@example.com")
+	svc := admin(h)
+
+	for name, id := range map[string]user.UserID{"self": mod.ID, "moderator": other.ID} {
+		if _, err := svc.DeleteUser(t.Context(), mod.ID, id); !errors.Is(err, user.ErrProtectedAccount) {
+			t.Errorf("delete %s: got %v, want ErrProtectedAccount", name, err)
+		}
+	}
+
+	// Модератор, удаливший себя сам, навсегда другим не удаляется.
+	h.DeleteAccount(t, other.ID)
+	if err := svc.PurgeUser(t.Context(), mod.ID, other.ID); !errors.Is(err, user.ErrProtectedAccount) {
+		t.Fatalf("purge self-deleted moderator: got %v, want ErrProtectedAccount", err)
 	}
 }

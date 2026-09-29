@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"strings"
+	"time"
 
+	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/user"
 	"github.com/krypton/auth-service/internal/platform/passhash"
 )
@@ -23,11 +25,20 @@ const (
 // в middleware по роли (authz.RequireModerator); здесь — только правила самих
 // операций.
 type Service struct {
-	repo user.Repository
+	repo     user.Repository
+	accounts AccountDeleter
+	cfg      config.AccountConfig
 }
 
-func NewService(repo user.Repository) *Service {
-	return &Service{repo: repo}
+// AccountDeleter — логическое удаление вместе с отзывом сессий. Его уже
+// делает сервис пользователя для удаления своего аккаунта; админка
+// переиспользует тот же сценарий, а не повторяет его.
+type AccountDeleter interface {
+	DeleteUser(ctx context.Context, id user.UserID) (time.Time, error)
+}
+
+func NewService(repo user.Repository, accounts AccountDeleter, cfg config.AccountConfig) *Service {
+	return &Service{repo: repo, accounts: accounts, cfg: cfg}
 }
 
 func (s *Service) ListUsers(ctx context.Context, f user.ListUsersFilter) ([]*user.AdminUserView, int, error) {
@@ -45,7 +56,7 @@ func (s *Service) ListUsers(ctx context.Context, f user.ListUsersFilter) ([]*use
 
 	views := make([]*user.AdminUserView, len(users))
 	for i, u := range users {
-		views[i] = user.NewAdminUserView(u)
+		views[i] = user.NewAdminUserView(u, s.cfg.RestoreWindow)
 	}
 	return views, total, nil
 }
@@ -86,7 +97,84 @@ func (s *Service) CreateUser(ctx context.Context, actor user.UserID, req *user.A
 		return nil, err
 	}
 
-	return &user.AdminCreateUserResult{User: user.NewAdminUserView(u), TemporaryPassword: password}, nil
+	return &user.AdminCreateUserResult{User: user.NewAdminUserView(u, s.cfg.RestoreWindow), TemporaryPassword: password}, nil
+}
+
+// DeleteUser — первый шаг удаления: аккаунт помечается удалённым, его
+// сессии гаснут, адрес освобождается. До конца окна восстановления его
+// можно вернуть (RestoreUser) или удалить навсегда (PurgeUser).
+func (s *Service) DeleteUser(ctx context.Context, actor, id user.UserID) (*user.AdminUserView, error) {
+	target, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := protect(actor, target); err != nil {
+		return nil, err
+	}
+
+	if _, err := s.accounts.DeleteUser(ctx, id); err != nil {
+		return nil, err
+	}
+	return s.view(ctx, id)
+}
+
+// RestoreUser снимает пометку удаления. Правила те же, что при
+// восстановлении владельцем: окно не истекло, адрес не занят новым
+// подтверждённым аккаунтом (иначе ErrEmailTaken). Сессию никому не выдаёт.
+func (s *Service) RestoreUser(ctx context.Context, id user.UserID) (*user.AdminUserView, error) {
+	target, err := s.repo.GetByIDWithDeleted(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if target.DeletedAt == nil {
+		return nil, user.ErrAccountNotDeleted
+	}
+	// Окно считается так же, как у владельца: после него аккаунт уже
+	// неотличим от несуществующего, даже если уборщик до него не дошёл.
+	if time.Since(*target.DeletedAt) >= s.cfg.RestoreWindow {
+		return nil, user.ErrRestoreExpired
+	}
+
+	if err := s.repo.Restore(ctx, id); err != nil {
+		return nil, err
+	}
+	return s.view(ctx, id)
+}
+
+// PurgeUser — второй шаг: физическое удаление уже удалённого логически
+// аккаунта. Живой аккаунт так не удалить — сначала DeleteUser. Данные
+// пользователя в других сервисах не трогаются.
+func (s *Service) PurgeUser(ctx context.Context, actor, id user.UserID) error {
+	target, err := s.repo.GetByIDWithDeleted(ctx, id)
+	if err != nil {
+		return err
+	}
+	if target.DeletedAt == nil {
+		return user.ErrAccountNotDeleted
+	}
+	// Модератор, удаливший свой аккаунт сам, остаётся под защитой: навсегда
+	// его унесёт только уборщик по окончании окна.
+	if err := protect(actor, target); err != nil {
+		return err
+	}
+
+	return s.repo.HardDelete(ctx, id)
+}
+
+func (s *Service) view(ctx context.Context, id user.UserID) (*user.AdminUserView, error) {
+	u, err := s.repo.GetByIDWithDeleted(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return user.NewAdminUserView(u, s.cfg.RestoreWindow), nil
+}
+
+// protect: модератор не удаляет ни себя, ни других модераторов.
+func protect(actor user.UserID, target *user.User) error {
+	if target.ID == actor || target.Role == user.RoleModerator {
+		return user.ErrProtectedAccount
+	}
+	return nil
 }
 
 // PromoteModerators выдаёт роль модератора по списку адресов из конфига.

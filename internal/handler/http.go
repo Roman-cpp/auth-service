@@ -64,6 +64,7 @@ var errorCatalog = []struct {
 	{user.ErrAccountDeleted, apiError{http.StatusForbidden, "account_deleted", "аккаунт удалён — его ещё можно восстановить"}},
 	{user.ErrRestoreExpired, apiError{http.StatusGone, "restore_expired", "срок восстановления аккаунта истёк"}},
 	{user.ErrAccountNotDeleted, apiError{http.StatusConflict, "account_not_deleted", "аккаунт не удалён, восстанавливать нечего"}},
+	{user.ErrProtectedAccount, apiError{http.StatusForbidden, "protected_account", "нельзя удалить свой аккаунт или аккаунт модератора"}},
 	{auth.ErrQRLoginExpired, apiError{http.StatusGone, "qr_expired", "QR-код устарел — обновите его"}},
 	{auth.ErrQRLoginState, apiError{http.StatusConflict, "qr_state", "запрос на вход уже обработан другим устройством или ещё не подтверждён"}},
 	{otp.ErrMailDelivery, apiError{http.StatusBadGateway, "mail_delivery_failed", "не удалось отправить письмо, попробуйте позже"}},

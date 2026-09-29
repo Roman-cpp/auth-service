@@ -104,6 +104,13 @@ func (r *UserRepository) GetByID(ctx context.Context, id user.UserID) (*user.Use
 	))
 }
 
+func (r *UserRepository) GetByIDWithDeleted(ctx context.Context, id user.UserID) (*user.User, error) {
+	return scanUser(r.pool.QueryRow(ctx,
+		`SELECT `+userColumns+` FROM users WHERE id = $1`,
+		id,
+	))
+}
+
 func (r *UserRepository) GetDeletedByEmail(ctx context.Context, email string) (*user.User, error) {
 	return scanUser(r.pool.QueryRow(ctx,
 		`SELECT `+userColumns+` FROM users
@@ -181,6 +188,14 @@ func (r *UserRepository) PurgeDeletedUsers(ctx context.Context, before time.Time
 	return tag.RowsAffected(), nil
 }
 
+// HardDelete уносит каскадом коды, refresh-токены и QR-заявки; отзыв
+// access-токенов записывает триггер на DELETE. Условие на deleted_at —
+// гарантия двух шагов на уровне базы, а не только сервиса.
+func (r *UserRepository) HardDelete(ctx context.Context, id user.UserID) error {
+	return execExpectingRow(ctx, r.pool,
+		`DELETE FROM users WHERE id = $1 AND deleted_at IS NOT NULL`, id)
+}
+
 func (r *UserRepository) MarkEmailVerified(ctx context.Context, id user.UserID) error {
 	return execExpectingRow(ctx, r.pool,
 		`UPDATE users SET email_verified_at = NOW(), updated_at = NOW()
@@ -201,8 +216,12 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, id user.UserID, pas
 func (r *UserRepository) ListUsers(ctx context.Context, f user.ListUsersFilter) ([]*user.User, int, error) {
 	pattern := "%" + likeEscaper.Replace(f.Query) + "%"
 	// Пустой запрос даёт шаблон «%%» — он совпадает со всеми строками.
-	const where = `deleted_at IS NULL AND (email ILIKE $1 OR
+	const search = ` AND (email ILIKE $1 OR
 		concat_ws(' ', last_name, first_name, patronymic) ILIKE $1)`
+	where, order := `deleted_at IS NULL`+search, `created_at DESC, id`
+	if f.Deleted {
+		where, order = `deleted_at IS NOT NULL`+search, `deleted_at DESC, id`
+	}
 
 	var total int
 	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE `+where, pattern).Scan(&total); err != nil {
@@ -211,7 +230,7 @@ func (r *UserRepository) ListUsers(ctx context.Context, f user.ListUsersFilter) 
 
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+userColumns+` FROM users WHERE `+where+`
-		  ORDER BY created_at DESC, id
+		  ORDER BY `+order+`
 		  LIMIT $2 OFFSET $3`,
 		pattern, f.Limit, f.Offset,
 	)

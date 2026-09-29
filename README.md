@@ -242,12 +242,16 @@ POST /api/v1/auth/password/change  {"current_password","new_password"} → 200 +
 его gateway пробрасывает остальным сервисам.
 
 ```
-GET  /api/v1/admin/users?q=&limit=50&offset=0 → 200 {"users": [...], "total": N}
-POST /api/v1/admin/users {"email","last_name","first_name","patronymic"?,"role"?}
+GET    /api/v1/admin/users?q=&status=active|deleted&limit=50&offset=0
+                                              → 200 {"users": [...], "total": N}
+POST   /api/v1/admin/users {"email","last_name","first_name","patronymic"?,"role"?}
                                               → 201 {"user": ..., "temporary_password": "..."}
+DELETE /api/v1/admin/users/{id}               → 200 {"user": ...}   логическое удаление
+POST   /api/v1/admin/users/{id}/restore       → 200 {"user": ...}
+DELETE /api/v1/admin/users/{id}/permanent     → 204                 удаление навсегда
 ```
 
-Обе ручки — только для модератора: без сессии `401`, без роли `403 forbidden`.
+Все ручки — только для модератора: без сессии `401`, без роли `403 forbidden`.
 Роль берётся из токена, но устареть не может: её смена отзывает все выданные
 токены пользователя (см. «Отзыв access-токенов»).
 
@@ -255,6 +259,18 @@ POST /api/v1/admin/users {"email","last_name","first_name","patronymic"?,"role"?
 модератор), а пароль у него **временный**: его генерирует сервис и отдаёт
 только в ответе на `POST`. Неподтверждённая заявка на тот же адрес
 перезаписывается, подтверждённый аккаунт — нет (`409 email_taken`).
+
+Удаление модератором — в **два шага**. `DELETE /admin/users/{id}` делает то же,
+что удаление владельцем: аккаунт помечен удалённым, сессии погашены, адрес
+свободен. Такой аккаунт виден в `?status=deleted` с полями `deleted_at` и
+`restore_available_until`; до этого срока его можно вернуть (`restore`) или
+удалить навсегда (`permanent`). Живой аккаунт навсегда не удаляется —
+`409 account_not_deleted`. Возврат после окна — `410 restore_expired`, на
+занятый адрес — `409 email_taken`.
+
+Свой аккаунт и аккаунты других модераторов модератор не удаляет —
+`403 protected_account`: свой удаляется через `/users/{id}`, а модератора
+удалить некому. Данные пользователя в других сервисах удаление не трогает.
 
 ### Временный пароль
 

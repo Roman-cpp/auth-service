@@ -80,7 +80,7 @@ func TestRoleChangeRevokesAccessTokens(t *testing.T) {
 	u := h.RegisterVerified(t, "revoke-role@example.com")
 	old := accessClaims(t, h, u)
 
-	if _, err := admin.NewService(h.Repo).PromoteModerators(t.Context(), []string{u.Email}); err != nil {
+	if _, err := admin.NewService(h.Repo, h.Users, h.Account).PromoteModerators(t.Context(), []string{u.Email}); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	if err := h.Revoked.Sync(t.Context()); err != nil {

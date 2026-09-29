@@ -11,6 +11,9 @@ type Repository interface {
 	// вернётся ErrEmailTaken.
 	Upsert(ctx context.Context, dto CreateDTO) (*User, error)
 	GetByID(ctx context.Context, id UserID) (*User, error)
+	// GetByIDWithDeleted — то же, но и логически удалённый аккаунт: админке
+	// нужно видеть его, чтобы восстановить или удалить навсегда.
+	GetByIDWithDeleted(ctx context.Context, id UserID) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	// GetDeletedByEmail возвращает самый свежий удалённый аккаунт с этим
 	// адресом. Удалённых строк на один адрес может быть несколько: удалил,
@@ -27,13 +30,17 @@ type Repository interface {
 	// указанного момента: окно восстановления кончилось. Коды и
 	// refresh-токены уходят каскадом.
 	PurgeDeletedUsers(ctx context.Context, before time.Time) (int64, error)
+	// HardDelete физически удаляет один логически удалённый аккаунт, не
+	// дожидаясь конца окна восстановления. Живой аккаунт не трогает —
+	// ErrNotFound: удаление навсегда только вторым шагом.
+	HardDelete(ctx context.Context, id UserID) error
 	MarkEmailVerified(ctx context.Context, id UserID) error
 	SetTwoFactorEnabled(ctx context.Context, id UserID, enabled bool) error
 	// UpdatePassword заодно снимает MustChangePassword: любой пароль,
 	// заданный самим владельцем, временным уже не является.
 	UpdatePassword(ctx context.Context, id UserID, passwordHash string) error
-	// ListUsers — живые аккаунты для админки, свежие сначала, и общее число
-	// подходящих под фильтр.
+	// ListUsers — аккаунты для админки и общее число подходящих под фильтр.
+	// Живые — свежие сначала; удалённые (f.Deleted) — недавно удалённые сначала.
 	ListUsers(ctx context.Context, f ListUsersFilter) ([]*User, int, error)
 	// PromoteModerators выдаёт роль модератора живым аккаунтам с этими
 	// адресами и возвращает, сколько строк изменилось.

@@ -72,7 +72,7 @@ func run() error {
 	revocations := revocation.NewList(sessions)
 	authSvc := auth.NewService(repo, sessions, tokens, codes, revocations, cfg.Account)
 	userSvc := user.NewService(repo, sessions, revocations, cfg.Account)
-	adminSvc := admin.NewService(repo)
+	adminSvc := admin.NewService(repo, userSvc, cfg.Account)
 	qrSvc := qrlogin.NewService(sessions, repo, tokens, cfg.QRLogin)
 
 	// Не фатально: без этого сервис работает, просто без новых модераторов.

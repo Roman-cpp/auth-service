@@ -17,6 +17,11 @@ var (
 	ErrAccountNotDeleted = errors.New("account is not deleted")
 )
 
+// ErrProtectedAccount: модератор не удаляет ни себя, ни других модераторов.
+// Свой аккаунт удаляется обычным путём, через /users/{id}; модератора
+// удалить некому — роли выше нет.
+var ErrProtectedAccount = errors.New("account cannot be deleted by a moderator")
+
 // ErrTwoFactorState: второй фактор уже включён или уже выключен — это
 // состояние самого пользователя, а не сценария входа.
 var ErrTwoFactorState = errors.New("two-factor authentication is already in the requested state")
