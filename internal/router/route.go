@@ -130,6 +130,11 @@ func NewRouter(h Handlers, mw Middleware) http.Handler {
 			r.Use(mw.Authn, mw.RequireModerator)
 			r.Get("/users", h.Admin.ListUsers)
 			r.Post("/users", h.Admin.CreateUser)
+			// Удаление в два шага: сначала логическое (его можно отменить
+			// restore), навсегда — только уже удалённого.
+			r.Delete("/users/{id}", h.Admin.DeleteUser)
+			r.Post("/users/{id}/restore", h.Admin.RestoreUser)
+			r.Delete("/users/{id}/permanent", h.Admin.PurgeUser)
 		})
 
 		r.Route("/users", func(r chi.Router) {

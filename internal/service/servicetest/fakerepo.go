@@ -105,6 +105,17 @@ func (f *FakeRepo) GetByID(_ context.Context, id user.UserID) (*user.User, error
 	return cloneUser(u), nil
 }
 
+func (f *FakeRepo) GetByIDWithDeleted(_ context.Context, id user.UserID) (*user.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	u, ok := f.users[id]
+	if !ok {
+		return nil, user.ErrNotFound
+	}
+	return cloneUser(u), nil
+}
+
 func (f *FakeRepo) GetByEmail(_ context.Context, email string) (*user.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -190,28 +201,46 @@ func (f *FakeRepo) PurgeDeletedUsers(_ context.Context, before time.Time) (int64
 		if u.DeletedAt == nil || !u.DeletedAt.Before(before) {
 			continue
 		}
-		// Как триггер на DELETE: токены физически удалённого отозваны.
-		f.revoked[id] = u.TokenVersion + 1
-		delete(f.users, id)
+		f.purge(id)
 		purged++
-
-		for codeID, c := range f.codes {
-			if c.UserID == id {
-				delete(f.codes, codeID)
-			}
-		}
-		for hash, rt := range f.refresh {
-			if rt.UserID == id {
-				delete(f.refresh, hash)
-			}
-		}
-		for qrID, q := range f.qr {
-			if q.UserID != nil && *q.UserID == id {
-				delete(f.qr, qrID)
-			}
-		}
 	}
 	return purged, nil
+}
+
+func (f *FakeRepo) HardDelete(_ context.Context, id user.UserID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	u, ok := f.users[id]
+	if !ok || u.DeletedAt == nil {
+		return user.ErrNotFound
+	}
+	f.purge(id)
+	return nil
+}
+
+// purge — физическое удаление строки с каскадом, как ON DELETE CASCADE в
+// схеме. Вызывается под f.mu.
+func (f *FakeRepo) purge(id user.UserID) {
+	// Как триггер на DELETE: токены физически удалённого отозваны.
+	f.revoked[id] = f.users[id].TokenVersion + 1
+	delete(f.users, id)
+
+	for codeID, c := range f.codes {
+		if c.UserID == id {
+			delete(f.codes, codeID)
+		}
+	}
+	for hash, rt := range f.refresh {
+		if rt.UserID == id {
+			delete(f.refresh, hash)
+		}
+	}
+	for qrID, q := range f.qr {
+		if q.UserID != nil && *q.UserID == id {
+			delete(f.qr, qrID)
+		}
+	}
 }
 
 func (f *FakeRepo) MarkEmailVerified(_ context.Context, id user.UserID) error {
@@ -243,7 +272,7 @@ func (f *FakeRepo) UpdatePassword(_ context.Context, id user.UserID, passwordHas
 }
 
 // ListUsers: поиск подстрокой без учёта регистра, свежие сначала — как
-// ORDER BY created_at DESC, id в SQL.
+// ORDER BY created_at DESC, id в SQL (у удалённых — по deleted_at).
 func (f *FakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*user.User, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -251,7 +280,7 @@ func (f *FakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*us
 	q := strings.ToLower(flt.Query)
 	var matched []*user.User
 	for _, u := range f.users {
-		if u.DeletedAt != nil {
+		if (u.DeletedAt != nil) != flt.Deleted {
 			continue
 		}
 		name := strings.ToLower(strings.Join([]string{u.LastName, u.FirstName, deref(u.Patronymic)}, " "))
@@ -260,7 +289,11 @@ func (f *FakeRepo) ListUsers(_ context.Context, flt user.ListUsersFilter) ([]*us
 		}
 	}
 	slices.SortFunc(matched, func(a, b *user.User) int {
-		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
+		if flt.Deleted {
+			if c := b.DeletedAt.Compare(*a.DeletedAt); c != 0 {
+				return c
+			}
+		} else if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
 			return c
 		}
 		return strings.Compare(a.ID, b.ID)
