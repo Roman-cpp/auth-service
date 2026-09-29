@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	authctx "github.com/krypton/auth-service/internal/platform/auth"
@@ -38,7 +39,7 @@ func NewQRHandler(svc *qrlogin.Service, cfg *config.Config, log *slog.Logger) *Q
 // для QR: ссылку на страницу подтверждения собирает фронтенд, ему известен
 // собственный адрес.
 func (h *QRHandler) Start(w http.ResponseWriter, r *http.Request) {
-	start, err := h.svc.Start(r.Context(), clientIP(r), r.UserAgent())
+	start, err := h.svc.Start(r.Context(), ClientIP(r), r.UserAgent())
 	if err != nil {
 		h.fail(w, r, "qr_start", err)
 		return
@@ -175,9 +176,13 @@ func (h *QRHandler) Reject(w http.ResponseWriter, r *http.Request) {
 	writeData(w, r, http.StatusOK, map[string]string{"message": "rejected"})
 }
 
-// clientIP: chimw.RealIP уже подставил X-Real-IP от гейтвея в RemoteAddr;
-// без гейтвея там host:port.
-func clientIP(r *http.Request) string {
+// ClientIP — адрес клиента, который chimw.ClientIPFromHeader взял из
+// X-Real-IP гейтвея. Без гейтвея (локальный запуск) заголовка нет, и
+// адрес берётся из TCP-соединения — его клиент подделать не может.
+func ClientIP(r *http.Request) string {
+	if ip := chimw.GetClientIP(r.Context()); ip != "" {
+		return ip
+	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}

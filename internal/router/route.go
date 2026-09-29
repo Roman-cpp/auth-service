@@ -14,10 +14,12 @@ import (
 // ограничение «не чаще письма в минуту на один аккаунт» живёт в otp.Service,
 // потому что httprate не умеет ключевать по телу запроса.
 //
-// KeyByRealIP: сервис стоит за gateway (nginx), который подставляет
-// X-Real-IP; по RemoteAddr все клиенты слились бы в одну корзину.
+// Ключ — IP клиента из handler.ClientIP (IPv6 — по /64, чтобы нельзя было
+// перебирать адреса внутри своей подсети).
 func limit(requests int, window time.Duration) func(http.Handler) http.Handler {
-	return httprate.Limit(requests, window, httprate.WithKeyFuncs(httprate.KeyByRealIP))
+	return httprate.LimitBy(requests, window, func(r *http.Request) (string, error) {
+		return httprate.CanonicalizeIP(handler.ClientIP(r)), nil
+	})
 }
 
 // Handlers — обработчики эндпоинтов по ресурсам.
@@ -40,7 +42,10 @@ func NewRouter(h Handlers, mw Middleware) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
-	r.Use(chimw.RealIP)
+	// Доверяем только X-Real-IP: gateway (nginx) перезаписывает его на каждом
+	// запросе. chimw.RealIP сначала читал True-Client-IP, который nginx
+	// пропускает от клиента как есть, — IP можно было подделать.
+	r.Use(chimw.ClientIPFromHeader("X-Real-IP"))
 	r.Use(chimw.Recoverer)
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {

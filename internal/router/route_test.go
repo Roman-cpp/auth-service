@@ -1,7 +1,9 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -52,5 +54,36 @@ func TestRouteTable(t *testing.T) {
 		if !registered[route] {
 			t.Errorf("route %q is not registered", route)
 		}
+	}
+}
+
+// Лимит считается по X-Real-IP от гейтвея. True-Client-IP и X-Forwarded-For
+// приходят от клиента как есть: если бы роутер им верил, перебор
+// обходил бы лимит, меняя заголовок в каждом запросе.
+func TestLimitKeyIgnoresClientHeaders(t *testing.T) {
+	pass := func(next http.Handler) http.Handler { return next }
+	r := NewRouter(Handlers{}, Middleware{Authn: pass, RequireModerator: pass})
+
+	register := func(realIP string, i int) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", nil)
+		req.Header.Set("X-Real-IP", realIP)
+		req.Header.Set("True-Client-IP", fmt.Sprintf("198.51.100.%d", i))
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("192.0.2.%d", i))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// registerLimiter — 5 в минуту.
+	for i := range 5 {
+		if code := register("203.0.113.7", i); code == http.StatusTooManyRequests {
+			t.Fatalf("request %d limited too early", i+1)
+		}
+	}
+	if code := register("203.0.113.7", 5); code != http.StatusTooManyRequests {
+		t.Fatalf("6th request with rotated client headers: got %d, want 429", code)
+	}
+	if code := register("203.0.113.8", 6); code == http.StatusTooManyRequests {
+		t.Fatalf("another X-Real-IP shares the bucket")
 	}
 }
