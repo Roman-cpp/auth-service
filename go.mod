@@ -10,7 +10,6 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/wneessen/go-mail v0.8.1
 	golang.org/x/crypto v0.54.0
 )
 

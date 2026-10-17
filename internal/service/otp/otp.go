@@ -11,7 +11,6 @@ import (
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/mailer"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -33,16 +32,23 @@ var codeSpace = big.NewInt(1_000_000)
 // будет ждать письмо, которого не будет.
 var ErrMailDelivery = errors.New("cannot deliver email")
 
+// Mailer доставляет письмо с кодом. Текст письма выбирается по purpose на
+// стороне почтовика. ref — ключ идемпотентности письма (id выпущенного кода):
+// почтовик по нему не создаёт второе письмо при повторе запроса.
+type Mailer interface {
+	SendCode(ctx context.Context, to string, purpose auth.CodePurpose, code string, ttl time.Duration, ref string) error
+}
+
 // Service выпускает и проверяет одноразовые коды. Все три сценария
 // (подтверждение почты, второй фактор входа, включение 2FA) отличаются
 // только значением purpose и текстом письма.
 type Service struct {
 	repo   auth.Repository
-	mailer *mailer.Mailer
+	mailer Mailer
 	cfg    config.CodesConfig
 }
 
-func NewService(repo auth.Repository, m *mailer.Mailer, cfg config.CodesConfig) *Service {
+func NewService(repo auth.Repository, m Mailer, cfg config.CodesConfig) *Service {
 	return &Service{repo: repo, mailer: m, cfg: cfg}
 }
 
@@ -54,13 +60,14 @@ func NewService(repo auth.Repository, m *mailer.Mailer, cfg config.CodesConfig) 
 // возвращаются сроки уже действующего. Это и есть защита от рассылки писем
 // на чужой адрес — повторные вызовы просто ничего не отправляют.
 //
-// Письмо отправляется синхронно: если SMTP недоступен, пользователь должен
-// увидеть ошибку сразу, а не ждать письмо, которого не будет.
+// Письмо отправляется синхронно: если почта недоступна, пользователь должен
+// увидеть ошибку сразу, а не ждать письмо, которого не будет. С mail-service
+// «отправлено» значит «принято в очередь» — доставку и повторы он берёт
+// на себя.
 func (s *Service) Issue(
 	ctx context.Context,
 	u *user.User,
 	purpose auth.CodePurpose,
-	tpl mailer.CodeTemplate,
 ) (*auth.CodeChallenge, error) {
 	active, err := s.activeWithinCooldown(ctx, u.ID, purpose)
 	if err != nil {
@@ -89,7 +96,7 @@ func (s *Service) Issue(
 		return nil, fmt.Errorf("store code: %w", err)
 	}
 
-	if err := s.mailer.SendCode(ctx, u.Email, tpl, code, s.cfg.TTL); err != nil {
+	if err := s.mailer.SendCode(ctx, u.Email, purpose, code, s.cfg.TTL, issued.ID); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrMailDelivery, err)
 	}
 

@@ -15,7 +15,7 @@ type Config struct {
 	Service  ServiceConfig
 	Database DatabaseConfig
 	JWT      JWTConfig
-	SMTP     SMTPConfig
+	Mail     MailConfig
 	Codes    CodesConfig
 	Account  AccountConfig
 	QRLogin  QRLoginConfig
@@ -47,38 +47,36 @@ type JWTConfig struct {
 	CookiePathPrefix string
 }
 
-// SMTPTransport — как разговаривать с SMTP-сервером.
-type SMTPTransport string
+// MailTransport — куда уходят письма с кодами. SMTP у auth-service нет:
+// письма собирает и отправляет mail-service, здесь только клиент к нему.
+type MailTransport string
 
 const (
-	// SMTPTransportNone — открытый 25/1025 без TLS. Только для локального
-	// Mailpit; наружу так письма не отправляют.
-	SMTPTransportNone SMTPTransport = "none"
-	// SMTPTransportSTARTTLS — обычный 587 с апгрейдом соединения.
-	SMTPTransportSTARTTLS SMTPTransport = "starttls"
-	// SMTPTransportTLS — implicit TLS, обычно 465.
-	SMTPTransportTLS SMTPTransport = "tls"
+	// MailTransportHTTP — письмо ставится в очередь mail-service подписанным
+	// HTTP-запросом. Транспорт по умолчанию.
+	MailTransportHTTP MailTransport = "http"
+	// MailTransportLog — код пишется в лог. Режим `go run` без почтовика,
+	// разрешён только для SERVICE_ENV=local.
+	MailTransportLog MailTransport = "log"
 )
 
-type SMTPConfig struct {
-	Host      string
-	Port      int
-	Username  string
-	Password  string
-	From      string
-	FromName  string
-	Transport SMTPTransport
-	// Timeout ограничивает всю отправку письма. Отправка синхронна внутри
-	// HTTP-запроса, поэтому висящий SMTP не должен утаскивать за собой
-	// весь запрос в WriteTimeout сервера.
+type MailConfig struct {
+	Transport  MailTransport
+	ServiceURL string
+	// ClientID — имя клиента в MAIL_API_KEYS почтовика, Secret — его секрет.
+	ClientID string
+	Secret   string
+	// Timeout — на один запрос к почтовику. Запрос синхронный внутри
+	// HTTP-запроса пользователя, поэтому висящий почтовик не должен
+	// утаскивать за собой весь запрос в WriteTimeout сервера.
 	Timeout time.Duration
-}
-
-// Enabled отличает настроенный SMTP от его отсутствия: без хоста сервис
-// поднимается с мейлером, который пишет коды в лог, — это рабочий режим
-// для `go run` без docker compose.
-func (c SMTPConfig) Enabled() bool {
-	return c.Host != ""
+	// CAFile — PEM с корнем CA почтовика, если у него не публичный
+	// сертификат (режим internal в mail-service/deploy). Задан — доверие
+	// только этому CA: системные корни для почтовика не используются.
+	CAFile string
+	// AllowInsecure разрешает http:// вне SERVICE_ENV=local. Только для
+	// частной сети между серверами: коды уходят без шифрования.
+	AllowInsecure bool
 }
 
 type CodesConfig struct {
@@ -128,15 +126,14 @@ func Load() (*Config, error) {
 			CookieSecure:     getEnv("COOKIE_SECURE", "true") == "true",
 			CookiePathPrefix: getEnv("COOKIE_PATH_PREFIX", "/api/auth"),
 		},
-		SMTP: SMTPConfig{
-			Host:      getEnv("SMTP_HOST", ""),
-			Port:      parseInt("SMTP_PORT", 587),
-			Username:  getEnv("SMTP_USERNAME", ""),
-			Password:  getEnv("SMTP_PASSWORD", ""),
-			From:      getEnv("SMTP_FROM", "no-reply@nexus.local"),
-			FromName:  getEnv("SMTP_FROM_NAME", "Nexus"),
-			Transport: SMTPTransport(getEnv("SMTP_TRANSPORT", string(SMTPTransportSTARTTLS))),
-			Timeout:   parseDuration("SMTP_TIMEOUT", 5*time.Second),
+		Mail: MailConfig{
+			Transport:     MailTransport(getEnv("MAIL_TRANSPORT", string(MailTransportHTTP))),
+			ServiceURL:    getEnv("MAIL_SERVICE_URL", ""),
+			ClientID:      getEnv("MAIL_CLIENT_ID", "auth"),
+			Secret:        getEnv("MAIL_SECRET", ""),
+			Timeout:       parseDuration("MAIL_TIMEOUT", 5*time.Second),
+			CAFile:        getEnv("MAIL_CA_FILE", ""),
+			AllowInsecure: getEnv("MAIL_ALLOW_INSECURE", "false") == "true",
 		},
 		Codes: CodesConfig{
 			TTL:            parseDuration("AUTH_CODE_TTL", 10*time.Minute),
@@ -162,10 +159,37 @@ func (c *Config) validate() error {
 	if len(c.JWT.Secret) < 32 {
 		return fmt.Errorf("JWT_SECRET must be at least 32 characters, got %d", len(c.JWT.Secret))
 	}
-	switch c.SMTP.Transport {
-	case SMTPTransportNone, SMTPTransportSTARTTLS, SMTPTransportTLS:
+	switch c.Mail.Transport {
+	case MailTransportLog:
+		// Коды в логе вместо почты — только на машине разработчика.
+		if c.Service.Env != "local" {
+			return fmt.Errorf("MAIL_TRANSPORT=log is allowed only for SERVICE_ENV=local, got SERVICE_ENV=%s", c.Service.Env)
+		}
+	case MailTransportHTTP:
+		u, err := url.Parse(c.Mail.ServiceURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("MAIL_SERVICE_URL must be an http(s) URL, got %q", c.Mail.ServiceURL)
+		}
+		// В запросе одноразовый код: по открытому http он допустим внутри
+		// docker-сети локального стенда или по явному согласию — для частной
+		// сети между серверами.
+		if u.Scheme == "http" && c.Service.Env != "local" && !c.Mail.AllowInsecure {
+			return fmt.Errorf("MAIL_SERVICE_URL must use https when SERVICE_ENV=%s (or set MAIL_ALLOW_INSECURE=true for a private network)", c.Service.Env)
+		}
+		if c.Mail.CAFile != "" && u.Scheme != "https" {
+			return fmt.Errorf("MAIL_CA_FILE is set but MAIL_SERVICE_URL is not https")
+		}
+		if c.Mail.ClientID == "" {
+			return fmt.Errorf("MAIL_CLIENT_ID must not be empty")
+		}
+		if len(c.Mail.Secret) < 32 {
+			return fmt.Errorf("MAIL_SECRET must be at least 32 characters, got %d", len(c.Mail.Secret))
+		}
+		if c.Mail.Timeout <= 0 {
+			return fmt.Errorf("MAIL_TIMEOUT must be positive, got %s", c.Mail.Timeout)
+		}
 	default:
-		return fmt.Errorf("SMTP_TRANSPORT must be one of none|starttls|tls, got %q", c.SMTP.Transport)
+		return fmt.Errorf("MAIL_TRANSPORT must be one of http|log, got %q", c.Mail.Transport)
 	}
 	if c.Codes.MaxAttempts < 1 {
 		return fmt.Errorf("AUTH_CODE_MAX_ATTEMPTS must be positive, got %d", c.Codes.MaxAttempts)

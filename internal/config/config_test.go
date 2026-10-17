@@ -8,11 +8,12 @@ import (
 
 func validConfig() *Config {
 	return &Config{
+		Service: ServiceConfig{Env: "local"},
 		JWT: JWTConfig{
 			Secret:      strings.Repeat("x", 32),
 			MFATokenTTL: 10 * time.Minute,
 		},
-		SMTP: SMTPConfig{Transport: SMTPTransportSTARTTLS},
+		Mail: MailConfig{Transport: MailTransportLog},
 		Codes: CodesConfig{
 			TTL:            10 * time.Minute,
 			ResendCooldown: time.Minute,
@@ -38,12 +39,106 @@ func TestValidateRejectsShortSecret(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsUnknownTransport(t *testing.T) {
+// Лог вместо почты означает нерабочую регистрацию и второй фактор — вне
+// локального запуска это ошибка конфигурации, а не режим.
+func TestValidateRejectsLogMailOutsideLocal(t *testing.T) {
 	cfg := validConfig()
-	cfg.SMTP.Transport = "carrier-pigeon"
+	cfg.Service.Env = "production"
 
 	if err := cfg.validate(); err == nil {
-		t.Fatal("unknown SMTP transport accepted")
+		t.Fatal("MAIL_TRANSPORT=log accepted in production")
+	}
+}
+
+func httpMail() MailConfig {
+	return MailConfig{
+		Transport:  MailTransportHTTP,
+		ServiceURL: "https://mail.example.com",
+		ClientID:   "auth",
+		Secret:     strings.Repeat("s", 32),
+		Timeout:    5 * time.Second,
+	}
+}
+
+func TestValidateAcceptsHTTPMail(t *testing.T) {
+	cfg := validConfig()
+	cfg.Mail = httpMail()
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+// В запросе к почтовику одноразовый код: открытый http допустим только на
+// локальном стенде, где почтовик в той же docker-сети.
+func TestValidateRejectsPlainHTTPMailOutsideLocal(t *testing.T) {
+	cfg := validConfig()
+	cfg.Service.Env = "production"
+	cfg.Mail = httpMail()
+	cfg.Mail.ServiceURL = "http://mail-service:8080"
+
+	if err := cfg.validate(); err == nil {
+		t.Fatal("plain http MAIL_SERVICE_URL accepted in production")
+	}
+
+	cfg.Service.Env = "local"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("plain http rejected locally: %v", err)
+	}
+}
+
+// Частная сеть между серверами: http вне local — только по явному согласию.
+func TestValidateAllowsInsecureMailOnlyExplicitly(t *testing.T) {
+	cfg := validConfig()
+	cfg.Service.Env = "production"
+	cfg.Mail = httpMail()
+	cfg.Mail.ServiceURL = "http://10.0.0.5"
+
+	if err := cfg.validate(); err == nil {
+		t.Fatal("plain http accepted without MAIL_ALLOW_INSECURE")
+	}
+	cfg.Mail.AllowInsecure = true
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("MAIL_ALLOW_INSECURE=true rejected: %v", err)
+	}
+}
+
+func TestValidateRejectsCAFileWithoutHTTPS(t *testing.T) {
+	cfg := validConfig()
+	cfg.Mail = httpMail()
+	cfg.Mail.ServiceURL = "http://mail-service:8080"
+	cfg.Mail.CAFile = "/etc/mail-ca/root.crt"
+
+	if err := cfg.validate(); err == nil {
+		t.Fatal("MAIL_CA_FILE with http URL accepted")
+	}
+}
+
+func TestValidateRejectsIncompleteHTTPMail(t *testing.T) {
+	broken := map[string]func(*MailConfig){
+		"no url":       func(m *MailConfig) { m.ServiceURL = "" },
+		"bad scheme":   func(m *MailConfig) { m.ServiceURL = "ftp://mail.example.com" },
+		"short secret": func(m *MailConfig) { m.Secret = "short" },
+		"no client":    func(m *MailConfig) { m.ClientID = "" },
+		"zero timeout": func(m *MailConfig) { m.Timeout = 0 },
+	}
+	for name, mutate := range broken {
+		cfg := validConfig()
+		cfg.Mail = httpMail()
+		mutate(&cfg.Mail)
+
+		if err := cfg.validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestValidateRejectsUnknownMailTransport(t *testing.T) {
+	cfg := validConfig()
+	cfg.Mail.Transport = "pigeon"
+
+	if err := cfg.validate(); err == nil {
+		t.Fatal("unknown MAIL_TRANSPORT accepted")
 	}
 }
 

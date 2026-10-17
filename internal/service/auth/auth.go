@@ -10,7 +10,6 @@ import (
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/mailer"
 	"github.com/krypton/auth-service/internal/platform/passhash"
 	"github.com/krypton/auth-service/internal/service/otp"
 	"github.com/krypton/auth-service/internal/service/token"
@@ -80,7 +79,7 @@ func (s *Service) Register(ctx context.Context, req *auth.Register) (*auth.Regis
 		return nil, err
 	}
 
-	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
+	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeEmailVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +102,7 @@ func (s *Service) ResendEmailVerification(ctx context.Context, email string) (*a
 		return s.codes.Challenge(time.Now()), nil
 	}
 
-	return s.codes.Issue(ctx, u, auth.CodePurposeEmailVerify, mailer.TemplateEmailVerify)
+	return s.codes.Issue(ctx, u, auth.CodePurposeEmailVerify)
 }
 
 // VerifyEmail подтверждает адрес и сразу открывает сессию — заставлять
@@ -178,7 +177,7 @@ func (s *Service) completeLogin(ctx context.Context, u *user.User) (*auth.LoginR
 		return &auth.LoginResult{User: user.NewUserPreview(u), Tokens: tokens}, nil
 	}
 
-	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeMFALogin, mailer.TemplateLoginCode)
+	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeMFALogin)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +208,7 @@ func (s *Service) ResendMFACode(ctx context.Context, mfaToken string) (string, *
 		return "", nil, err
 	}
 
-	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeMFALogin, mailer.TemplateLoginCode)
+	challenge, err := s.codes.Issue(ctx, u, auth.CodePurposeMFALogin)
 	if err != nil {
 		return "", nil, err
 	}
@@ -232,7 +231,7 @@ func (s *Service) StartEnableTwoFactor(ctx context.Context, id user.UserID, pass
 	if u.TwoFactorEnabled {
 		return nil, user.ErrTwoFactorState
 	}
-	return s.codes.Issue(ctx, u, auth.CodePurposeMFAEnable, mailer.TemplateEnableTwoFactor)
+	return s.codes.Issue(ctx, u, auth.CodePurposeMFAEnable)
 }
 
 // ConfirmEnableTwoFactor включает второй фактор только после успешного ввода
@@ -378,7 +377,7 @@ func (s *Service) StartPasswordReset(ctx context.Context, email string) (*auth.C
 		return s.codes.Challenge(time.Now()), nil
 	}
 
-	return s.codes.Issue(ctx, u, auth.CodePurposePasswordReset, mailer.TemplatePasswordReset)
+	return s.codes.Issue(ctx, u, auth.CodePurposePasswordReset)
 }
 
 // ResetPassword меняет пароль по коду из письма.

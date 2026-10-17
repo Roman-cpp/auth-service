@@ -2,7 +2,6 @@ package servicetest
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/krypton/auth-service/internal/config"
 	"github.com/krypton/auth-service/internal/domain/auth"
 	"github.com/krypton/auth-service/internal/domain/user"
-	"github.com/krypton/auth-service/internal/mailer"
 	authservice "github.com/krypton/auth-service/internal/service/auth"
 	"github.com/krypton/auth-service/internal/service/otp"
 	"github.com/krypton/auth-service/internal/service/qrlogin"
@@ -20,34 +18,29 @@ import (
 	userservice "github.com/krypton/auth-service/internal/service/user"
 )
 
-// Код вытаскивается из готового письма, а не подсматривается в сервисе:
-// так тесты заодно проверяют, что он вообще доезжает до текста письма.
-var codeInMail = regexp.MustCompile(`\b(\d{6})\b`)
-
+// SentMail — что сервис передал почтовику: письмо собирает mail-service,
+// здесь виден только сценарий и код.
 type SentMail struct {
 	To      string
-	Subject string
+	Purpose auth.CodePurpose
 	Code    string
 }
 
+// CaptureSender подменяет mail-service: запоминает вызовы SendCode.
 type CaptureSender struct {
 	mu   sync.Mutex
 	sent []SentMail
 	err  error
 }
 
-func (s *CaptureSender) Send(_ context.Context, msg mailer.Message) error {
+func (s *CaptureSender) SendCode(_ context.Context, to string, purpose auth.CodePurpose, code string, _ time.Duration, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.err != nil {
 		return s.err
 	}
-	m := SentMail{To: msg.To, Subject: msg.Subject}
-	if match := codeInMail.FindStringSubmatch(msg.Text); match != nil {
-		m.Code = match[1]
-	}
-	s.sent = append(s.sent, m)
+	s.sent = append(s.sent, SentMail{To: to, Purpose: purpose, Code: code})
 	return nil
 }
 
@@ -102,7 +95,7 @@ func New(t *testing.T) *Harness {
 	accountCfg := config.AccountConfig{RestoreWindow: 365 * 24 * time.Hour}
 
 	tokens := token.NewIssuer(repo, jwtCfg)
-	codes := otp.NewService(repo, mailer.New(sender, "Nexus"), codesCfg)
+	codes := otp.NewService(repo, sender, codesCfg)
 	revoked := revocation.NewList(repo)
 	if err := revoked.Sync(context.Background()); err != nil {
 		t.Fatalf("sync revocations: %v", err)

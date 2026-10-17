@@ -65,7 +65,19 @@ func run() error {
 
 	repo := repository.NewUserRepository(pool)
 	sessions := repository.NewAuthRepository(pool)
-	mail := mailer.New(mailer.NewSender(cfg.SMTP, log), cfg.SMTP.FromName)
+
+	// Письма с кодами уходят в очередь mail-service; log — режим разработчика
+	// без почтовика (конфиг разрешает его только в local).
+	var mail otp.Mailer
+	if cfg.Mail.Transport == config.MailTransportLog {
+		mail = mailer.NewLog(log)
+	} else {
+		remote, err := mailer.NewRemote(cfg.Mail)
+		if err != nil {
+			return err
+		}
+		mail = remote
+	}
 
 	tokens := token.NewIssuer(sessions, cfg.JWT)
 	codes := otp.NewService(sessions, mail, cfg.Codes)
@@ -107,15 +119,18 @@ func run() error {
 		Handler:           router.NewRouter(handlers, middleware),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		// Больше, чем у остальных сервисов: письмо с кодом отправляется
-		// синхронно внутри запроса, и на это заложен SMTP_TIMEOUT.
+		// Больше, чем у остальных сервисов: письмо с кодом ставится в очередь
+		// почтовика синхронно внутри запроса — MAIL_TIMEOUT и один повтор.
 		WriteTimeout: 20 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("server listening", slog.String("addr", srv.Addr), slog.Bool("smtp", cfg.SMTP.Enabled()))
+		log.Info("server listening",
+			slog.String("addr", srv.Addr),
+			slog.String("mail_transport", string(cfg.Mail.Transport)),
+		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
